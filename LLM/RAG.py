@@ -11,6 +11,16 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os, re, json
 from typing import List, Dict, Any, Tuple
+from konlpy.tag import Okt
+import sys
+import os
+# 현재 파일의 디렉토리에서 상위 디렉토리로 이동 후 RAG_embedding 폴더 추가
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+rag_embedding_dir = os.path.join(parent_dir, 'RAG_embedding')
+
+sys.path.append(rag_embedding_dir)
+from graph_rag import GraphRAG
 
 # ===== 0) 환경설정 =====
 load_dotenv()
@@ -22,6 +32,35 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 
 # 인덱싱 때 썼던 임베딩 모델과 반드시 동일하게!
 EMBED_MODEL = os.getenv("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+
+okt_analyzer = Okt()
+STOPWORDS = [
+    '의', '가', '이', '은', '들', '는', '좀', '잘', '걍', '과', '도', '를', '으로', '자', '에', '와', '한', '하다',
+    '상품명', '설명', '사유', '이름', '제품', '관련', '내용', '항목', '분류', '기준',
+    'hs', 'code', 'item', 'des', 'description', 'name'
+]
+def extract_keywords_advanced(text: str) -> str:
+    """사용자 입력을 DB와 동일한 '키워드' 형식으로 변환"""
+    
+    # (1단계(인덱싱)에서 쓴 로직과 100% 동일해야 함)
+    tagged_words = okt_analyzer.pos(text, norm=True, stem=False)
+    keywords = []
+
+    for word, tag in tagged_words:
+        if tag in ['Noun', 'Alpha']:
+            keywords.append(word)
+    regex_keywords = re.findall(r'\b[a-zA-Z0-9]{2,}\b', text)
+    keywords.extend(regex_keywords)
+    filtered_keywords = set() 
+
+    for k in keywords:
+        k_lower = k.lower() 
+        if len(k) > 1 and k_lower not in STOPWORDS:
+            filtered_keywords.add(k)
+
+    return " ".join(sorted(list(filtered_keywords)))
+    
+  
 
 # ===== 1) 안전 JSON 파서(네 코드 그대로) =====
 def _parse_json_safely(text: str):
@@ -116,16 +155,20 @@ def search_chroma(collection, embedder, query_text: str, top_k: int = 12):
 
 
 # ===== 3) RAG 프롬프트 빌더 =====
-def build_rag_prompt(product_name: str, product_description: str, retrieved: List[Dict[str, Any]], top_n: int) -> Tuple[str, str]:
+def build_rag_prompt(product_name: str, product_description: str, retrieved: List[Dict[str, Any]], top_n: int, graph_context: str = "") -> Tuple[str, str]:
     """
     - system: 컨텍스트 내에서만 답하도록 가드
     - user: 질문 + 컨텍스트 + JSON 스키마(엄격)
     """
     system = (
-        "당신은 HS 코드 분류 전문가입니다. 제공된 context의 내용을 참고해서 답하세요. "
-        "context는 사용자가 입력한 내용과 유사한 HS코드 품목분류사례 데이터입니다"
-        "HS코드 품목분류사례에 모든 HS코드 사례가 있지 않으므로 유사도가 떨어질 수도 있으니 그런 경우 참고만 할 것"
-        "항상 JSON 스키마로만 응답하세요."
+        "당신은 국제무역 HS 코드 분류 전문가입니다.\n\n"
+        "규칙:\n"
+        "1) 제공된 context 내의 정보만 사용하여 판단합니다.\n"
+        "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
+        "   품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+        "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
+        "4) 항상 응답은 strict JSON format으로만 출력합니다.\n"
+        "5) 확신이 없을 경우 'candidates': [] 로 응답합니다."
     )
 
     # ===== 여기부터 컨텍스트 블록 구성 부분만 요청한 방식으로 교체 =====
@@ -169,8 +212,15 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
             f"상품명: {name}\nHSCode: {hs}\n시행일자: {date}\n본문:\n{body}\n"
         )
 
-    context = "\n\n".join(blocks) if blocks else "(검색 결과 없음)"
+    vector_context = "\n\n".join(blocks) if blocks else "(검색 결과 없음)"
     # ===== 교체 끝 =====
+
+    # GraphDB context 추가
+    graph_section = ""
+    if graph_context.strip():
+        graph_section = f"{graph_context}"
+    else:
+        graph_section = "(GraphDB 검색 결과 없음)"
 
     user = f"""
 다음 제품의 HS 코드 상위 {top_n} 후보를 추천.
@@ -179,8 +229,17 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
 - Product Name: {product_name}
 - Product Description: {product_description}
 
-[컨텍스트]
-{context}
+================================================
+[context]
+[HS Code 계층 구조 Context — GraphDB Retrieved]
+(모든 데이터는 HS 공식 nomenclature 기반)
+{graph_section}
+================================================
+
+[품목분류사례 Context — VectorDB Retrieved]
+(정부 품목분류사례 문서 기반 근거 자료)
+{vector_context}  
+================================================
 
 [응답 형식: strict JSON — 추가 키 금지]
 {{
@@ -188,17 +247,21 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
     {{
       "hs_code": "string",
       "title": "string",
-      "reason": "string",          // 한국어, 200자 이내
-      "gri": ["string"],           // 적용 GRI; 불명확하면 빈 배열
-      "citations": [{{"doc_id":"string"}}]  // [DOC id=...]의 id 사용
+      "reason": "string",           // 한국어, 200자 이내
+      "citations": [
+        {{"type": "graph", "code": "string"}},   // GraphDB 근거
+        {{"type": "case", "doc_id": "string"}}   // VectorDB 근거
+      ]
     }}
   ]
 }}
 
-규칙:
-- 후보는 최대 {top_n}개.
-- 최대한 context 근거를 인용, 'citations'에 근거 문서 id를추가.
-- 근거가 부족하면 "candidates": [] 로 빈칸 처리.
+필수 규칙:
+1) 후보는 최대 {top_n}개.
+2) 먼저 GraphDB Context에서 가능한 코드만 후보로 선정.
+3) VectorDB 사례는 근거(citations)로 보조 활용.
+4) citations는 최소 1개 이상 포함.
+5) citations.type은 반드시 "graph" 또는 "case"만 가능.
 """
     return system, user
 
@@ -207,32 +270,43 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
 def classify_hs_code_rag(product_name: str, product_description: str, top_n: int = 3) -> Dict[str, Any]:
     """
     1) Chroma에서 유사 문서 검색
-    2) 컨텍스트를 붙여 LLM(JSON 강제) 호출
-    3) JSON 파싱해 반환
+    2) GraphRAG에서 계층 구조 정보 검색
+    3) 컨텍스트를 붙여 LLM(JSON 강제) 호출
+    4) JSON 파싱해 반환
     """
-    # 1) 검색
+    # 1) Chroma 검색
     emb = QueryEmbedder(EMBED_MODEL)
     col = open_chroma_collection(CHROMA_DIR, COLLECTION_NAME)
-    query_text = f"{product_name}\n{product_description}"
-    hits = search_chroma(col, emb, query_text, top_k=max(8, top_n*3))
+    original_query_text = f"{product_name}\n{product_description}"
+    keyword_query_text = extract_keywords_advanced(original_query_text)
+    
+    hits = search_chroma(col, emb, keyword_query_text, top_k=max(8, top_n*3))
 
-    # 2) 프롬프트 구성
-    sys_prompt, user_prompt = build_rag_prompt(product_name, product_description, hits, top_n)
+    # 2) GraphRAG에서 계층 구조 정보 검색
+    try:
+        graph_rag = GraphRAG()
+        graph_context = graph_rag.get_final_context(original_query_text, k=5)
+    except Exception as e:
+        print(f"GraphRAG 오류: {e}")
+        graph_context = ""
 
-    # 3) JSON 모드 호출
+    # 3) 프롬프트 구성
+    sys_prompt, user_prompt = build_rag_prompt(product_name, product_description, hits, top_n, graph_context)
+
+    # 4) JSON 모드 호출
     response = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
             {"role": "system", "content": sys_prompt},
             {"role": "user",   "content": user_prompt}
         ],
-        temperature=0.0,
+        temperature=0.2,
         response_format={"type": "json_object"}  # <- 핵심: 순수 JSON만 반환
     )
 
     output_text = response.choices[0].message.content.strip()
 
-    # 4) 안전 파싱
+    # 5) 안전 파싱
     result, err = _parse_json_safely(output_text)
     if err:
         result = {"error": err, "raw_output": output_text}
@@ -240,9 +314,100 @@ def classify_hs_code_rag(product_name: str, product_description: str, top_n: int
     return result
 
 
-# ===== 5) 예시 실행 =====
+# ===== 5) GraphRAG 통합 헬퍼 함수 =====
+def get_enhanced_context(product_name: str, product_description: str, k: int = 5) -> Dict[str, str]:
+    """
+    ChromaDB와 GraphDB의 컨텍스트를 모두 가져오는 헬퍼 함수
+    
+    Args:
+        product_name: 상품명
+        product_description: 상품설명
+        k: GraphDB에서 검색할 후보 개수
+        
+    Returns:
+        Dict[str, str]: chroma_context와 graph_context를 포함한 딕셔너리
+    """
+    # ChromaDB 컨텍스트
+    emb = QueryEmbedder(EMBED_MODEL)
+    col = open_chroma_collection(CHROMA_DIR, COLLECTION_NAME)
+    original_query_text = f"{product_name}\n{product_description}"
+    keyword_query_text = extract_keywords_advanced(original_query_text)
+    
+    hits = search_chroma(col, emb, keyword_query_text, top_k=8)
+    
+    # ChromaDB 컨텍스트 구성
+    def _pick(meta, keys, default=""):
+        for k in keys:
+            v = meta.get(k)
+            if v not in (None, ""):
+                return str(v)
+        return default
+
+    def _fallback_name_from_body(body: str) -> str:
+        m = re.search(r"^상품명:\s*(.+)$", body, flags=re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    blocks = []
+    for d in hits[:10]:
+        meta = d.get("metadata", {}) or {}
+        body = (d.get("document") or "").strip()
+
+        hs   = _pick(meta, ["HSCode", "hs_code", "HS", "HS부호"])
+        name = _pick(meta, ["상품명", "한글품목명", "title", "품목명"]) or _fallback_name_from_body(body)
+        date = _pick(meta, ["시행일자", "발행일"])
+
+        max_chars = 1200
+        if len(body) > max_chars:
+            body = body[:max_chars] + "…"
+
+        dist = d.get("distance", 0.0)
+        try:
+            dist = float(dist)
+        except Exception:
+            dist = 0.0
+
+        blocks.append(
+            f"[DOC id={d.get('id')} dist={dist:.4f}]\n"
+            f"상품명: {name}\nHSCode: {hs}\n시행일자: {date}\n본문:\n{body}\n"
+        )
+
+    chroma_context = "\n\n".join(blocks) if blocks else "(검색 결과 없음)"
+    
+    # GraphDB 컨텍스트
+    try:
+        graph_rag = GraphRAG()
+        graph_context = graph_rag.get_final_context(original_query_text, k=k)
+    except Exception as e:
+        print(f"GraphRAG 오류: {e}")
+        graph_context = ""
+    
+    return {
+        "vector_context": chroma_context,
+        "graph_context": graph_context,
+        "query_text": original_query_text
+    }
+
+
+# ===== 6) 예시 실행 =====
 if __name__ == "__main__":
+    print("=== 통합 RAG 테스트 (ChromaDB + GraphDB) ===")
     name = "LED 조명"
     desc = "플라스틱 하우징에 장착된 LED 조명 모듈로, 실내용 조명 기구"
+    
+    print(f"상품명: {name}")
+    print(f"상품설명: {desc}")
+    print("\n처리 중...")
+    
+    # 1. 개별 컨텍스트 확인
+    print("\n=== 1. 컨텍스트 확인 ===")
+    contexts = get_enhanced_context(name, desc, k=5)
+    print(f"VectorDB 컨텍스트 길이: {len(contexts['vector_context'])}")
+    print(f"GraphDB 컨텍스트 길이: {len(contexts['graph_context'])}")
+    
+    # 2. 통합 RAG 실행
+    print("\n=== 2. 통합 RAG 실행 ===")
     out = classify_hs_code_rag(name, desc, top_n=3)
+    print("\n=== 최종 결과 ===")
     print(json.dumps(out, ensure_ascii=False, indent=2))
+
+# python LLM/RAG.py
