@@ -17,7 +17,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Chroma 설정(폴더 경로 = chroma.sqlite3가 들어있는 디렉터리)
-CHROMA_DIR = os.getenv("CHROMA_DIR", r"chroma_db")  # 예: C:\...\embedding\chroma_db
+CHROMA_DIR = os.getenv("CHROMA_DIR", r"../chroma_db")  # 예: C:\...\embedding\chroma_db
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 
 # 인덱싱 때 썼던 임베딩 모델과 반드시 동일하게!

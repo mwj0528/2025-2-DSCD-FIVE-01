@@ -19,7 +19,6 @@ config.py
 
 # 산출물/데이터(원하면 계속 무시)
 dataset/
-output/
 
 # 빈 폴더 추적용
 !**/.gitkeep
