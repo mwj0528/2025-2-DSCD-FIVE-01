@@ -49,7 +49,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 # RAG 엔진 import (팀원 코드)
-from rag_hs_prompt import classify_hs_code_rag
+import RAG
 
 
 class HSCodeEvaluator:
@@ -184,7 +184,7 @@ class HSCodeEvaluator:
             
             # RAG로 예측
             try:
-                result = classify_hs_code_rag(
+                result = RAG(
                     product_name=product_name,
                     product_description=product_desc,
                     top_n=top_n
@@ -347,7 +347,7 @@ class HSCodeEvaluator:
 # ============================================================================
 if __name__ == "__main__":
     # 정답 데이터 경로 (여러분의 파일 경로로 ㄷ수정하세요)
-    GOLD_FILE = "/mnt/data/HScode_랜덤100개_기타제외.xlsx"
+    GOLD_FILE = r"E:\PythonProjects\Capstone\output\HScode_100개_filled.xlsx"
     
     # 평가 실행
     evaluator = HSCodeEvaluator(gold_path=GOLD_FILE)
