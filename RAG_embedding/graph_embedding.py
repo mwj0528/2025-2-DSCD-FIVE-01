@@ -15,7 +15,8 @@ EMBEDDING_DIM = 384
 
 # --- 2. 임베딩 모델 정의 ---
 embedding_model = SentenceTransformerEmbeddings(
-    model_name=MODEL_NAME
+    model_name=MODEL_NAME,
+    encode_kwargs={"normalize_embeddings": True}
 )
 
 # --- 3. Vector Index 생성 및 데이터 쓰기 (통합) ---

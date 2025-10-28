@@ -33,7 +33,8 @@ class GraphRAG:
         
         # Vector DB 설정
         self.MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        self.embedding_model = SentenceTransformerEmbeddings(model_name=self.MODEL_NAME)
+        self.embedding_model = SentenceTransformerEmbeddings(model_name=self.MODEL_NAME,
+                                encode_kwargs={"normalize_embeddings": True})
         
         # Neo4j Vector DB 인스턴스 생성
         self.neo4j_vector_db = Neo4jVector.from_existing_graph(
@@ -48,18 +49,41 @@ class GraphRAG:
         )
 
     def get_vector_candidates(self, user_query: str, k: int = 5) -> List[str]:
-        """Vector Search를 실행하여 상위 k개의 후보 코드(4~6자리)를 반환"""
-        # neo4j_vector_db 인스턴스를 사용하여 유사도 검색 실행
-        search_results = self.neo4j_vector_db.similarity_search(user_query, k=k)
-        
-        # 4자리 또는 6자리 코드만 추출하여 상위 레벨로 사용 (전략적 필터링)
-        candidate_codes = set()
-        for doc in search_results:
-            code = doc.metadata.get('code')
-            if code and len(code) in [4, 6]:
-                 candidate_codes.add(code)
-        
-        return list(candidate_codes)
+        """유사도 순서를 유지하면서 4/6자리 코드만 필터링 후 최대 k개 반환.
+        부족하면 점증적으로 검색 범위를 늘려 k개를 최대한 채운다.
+        """
+        current_fetch = max(20, k * 5)
+        max_fetch = max(100, k * 50)
+        last_count = -1
+
+        while True:
+            results = self.neo4j_vector_db.similarity_search(user_query, k=current_fetch)
+
+            # 유사도 순서 유지하며 필터링 + 중복 제거
+            ordered_unique: List[str] = []
+            seen: set = set()
+            for doc in results:
+                code = doc.metadata.get("code")
+                if not code:
+                    continue
+                if len(code) not in (4, 6):
+                    continue
+                if code in seen:
+                    continue
+                seen.add(code)
+                ordered_unique.append(code)
+                if len(ordered_unique) >= k:
+                    break
+
+            if len(ordered_unique) >= k:
+                return ordered_unique[:k]
+
+            # 더 가져와도 증가가 없거나 상한 도달 시 종료
+            if len(results) == last_count or current_fetch >= max_fetch:
+                return ordered_unique
+
+            last_count = len(results)
+            current_fetch = min(current_fetch * 2, max_fetch)
 
     def get_graph_context(self, candidate_codes: List[str]) -> str:
         """후보 코드를 기반으로 계층 경로를 탐색하고 LLM Context를 생성"""

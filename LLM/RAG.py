@@ -27,7 +27,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Chroma 설정(폴더 경로 = chroma.sqlite3가 들어있는 디렉터리)
-CHROMA_DIR = os.getenv("CHROMA_DIR", r"../chroma_db")  # 예: C:\...\embedding\chroma_db
+CHROMA_DIR = os.getenv("CHROMA_DIR", "data/chroma_db")  # 예: C:\...\embedding\chroma_db
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 
 # 인덱싱 때 썼던 임베딩 모델과 반드시 동일하게!
@@ -404,6 +404,11 @@ if __name__ == "__main__":
     contexts = get_enhanced_context(name, desc, k=5)
     print(f"VectorDB 컨텍스트 길이: {len(contexts['vector_context'])}")
     print(f"GraphDB 컨텍스트 길이: {len(contexts['graph_context'])}")
+    # 컨텍스트 전문 출력
+    print("\n--- VectorDB 컨텍스트 ---")
+    print(contexts['vector_context'])
+    print("\n--- GraphDB 컨텍스트 ---")
+    print(contexts['graph_context'])
     
     # 2. 통합 RAG 실행
     print("\n=== 2. 통합 RAG 실행 ===")
