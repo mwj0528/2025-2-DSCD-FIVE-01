@@ -183,7 +183,9 @@ class HSClassifier:
         rerank_top_m: int = 5,
         use_graph_rerank: bool = False,
         graph_rerank_model: str = None,
-        graph_rerank_top_m: int = 5
+        graph_rerank_top_m: int = 5,
+        temperature: float = 0.0,
+        seed: Optional[int] = None
     ):
         """
         Args:
@@ -215,6 +217,10 @@ class HSClassifier:
         self.openai_model = openai_model or DEFAULT_OPENAI_MODEL
         self.rerank_model = rerank_model or DEFAULT_RERANK_MODEL
         self.rerank_top_m = max(1, int(rerank_top_m)) if isinstance(rerank_top_m, int) else 8
+        self.temperature = float(temperature)
+        # seed 우선순위: 인자 > 환경변수 > None
+        env_seed = os.getenv("LLM_SEED")
+        self.seed = seed if seed is not None else (int(env_seed) if env_seed and env_seed.isdigit() else None)
         
         # OpenAI 클라이언트 초기화
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
@@ -489,8 +495,12 @@ class HSClassifier:
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.2,
-            response_format={"type": "json_object"}
+            temperature=self.temperature,
+            top_p=1,
+            frequency_penalty=0,
+            presence_penalty=0,
+            response_format={"type": "json_object"},
+            **({"seed": self.seed} if self.seed is not None else {})
         )
         
         output_text = response.choices[0].message.content.strip()
