@@ -85,6 +85,41 @@ def main():
         dest="use_keyword_extraction",
         help="ChromaDB 검색 시 키워드 추출 사용 안 함 (기본값: 키워드 추출 사용)"
     )
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Chroma 검색 결과에 CrossEncoder ReRank 적용 (기본: 미적용)"
+    )
+    parser.add_argument(
+        "--rerank-model",
+        type=str,
+        default=None,
+        help="ReRank에 사용할 CrossEncoder 모델명 (기본값: 환경변수 RERANK_MODEL 또는 ms-marco MiniLM)"
+    )
+    parser.add_argument(
+        "--rerank-top-m",
+        type=int,
+        default=5,
+        help="ReRank 후 상위 몇 개를 컨텍스트에 사용할지 (기본: 5)"
+    )
+    # Graph ReRank 옵션
+    parser.add_argument(
+        "--graph-rerank",
+        action="store_true",
+        help="Graph 후보 코드(4/6자리)에 CrossEncoder ReRank 적용 (기본: 미적용)"
+    )
+    parser.add_argument(
+        "--graph-rerank-model",
+        type=str,
+        default=None,
+        help="Graph ReRank에 사용할 CrossEncoder 모델명 (기본: 환경변수 GRAPH_RERANK_MODEL 또는 ms-marco MiniLM)"
+    )
+    parser.add_argument(
+        "--graph-rerank-top-m",
+        type=int,
+        default=5,
+        help="Graph ReRank 후 상위 몇 개 후보 코드를 사용할지 (기본: 5)"
+    )
     
     args = parser.parse_args()
     
@@ -100,7 +135,13 @@ def main():
             parser_type=args.parser,
             chroma_dir=args.chroma_dir,
             collection_name=args.collection_name,
-            use_keyword_extraction=args.use_keyword_extraction
+            use_keyword_extraction=args.use_keyword_extraction,
+            use_rerank=args.rerank,
+            rerank_model=args.rerank_model,
+            rerank_top_m=args.rerank_top_m,
+            use_graph_rerank=args.graph_rerank,
+            graph_rerank_model=args.graph_rerank_model,
+            graph_rerank_top_m=args.graph_rerank_top_m
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -178,5 +219,17 @@ if __name__ == "__main__":
   
   # 둘 다 사용
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --no-keyword-extraction
+
+
+  ### ReRank 적용 버전 ###
+
+  # ChromaDB ReRank 적용
+  python LLM/run_rag.py --parser chroma --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --rerank
+  
+  # GraphDB ReRank 적용
+  python LLM/run_rag.py --parser graph --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --graph-rerank
+  
+  # 둘 다 ReRank 적용
+  python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --rerank --graph-rerank
 
 """

@@ -43,7 +43,42 @@ def main():
         "--output-path",
         type=str,
         default=None,
-        help="결과 저장 경로 (기본값: ../output/eval_result.csv)"
+        help="결과 저장 경로 (기본값: ../output/results/eval_result.csv)"
+    )
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Chroma 검색 결과에 CrossEncoder ReRank 적용 (기본: 미적용)"
+    )
+    parser.add_argument(
+        "--rerank-model",
+        type=str,
+        default=None,
+        help="ReRank에 사용할 CrossEncoder 모델명 (기본값: 환경변수 RERANK_MODEL 또는 ms-marco MiniLM)"
+    )
+    parser.add_argument(
+        "--rerank-top-m",
+        type=int,
+        default=5,
+        help="ReRank 후 상위 몇 개를 컨텍스트에 사용할지 (기본: 5)"
+    )
+    # Graph ReRank 옵션
+    parser.add_argument(
+        "--graph-rerank",
+        action="store_true",
+        help="Graph 후보 코드(4/6자리)에 CrossEncoder ReRank 적용 (기본: 미적용)"
+    )
+    parser.add_argument(
+        "--graph-rerank-model",
+        type=str,
+        default=None,
+        help="Graph ReRank에 사용할 CrossEncoder 모델명 (기본: 환경변수 GRAPH_RERANK_MODEL 또는 ms-marco MiniLM)"
+    )
+    parser.add_argument(
+        "--graph-rerank-top-m",
+        type=int,
+        default=5,
+        help="Graph ReRank 후 상위 몇 개 후보 코드를 사용할지 (기본: 5)"
     )
     
     args = parser.parse_args()
@@ -52,7 +87,7 @@ def main():
     if args.data_path:
         DATA_PATH = args.data_path
     else:
-        DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'eval_dataset.csv')
+        DATA_PATH = "data/eval_dataset_1031.csv"
     
     df = pd.read_csv(DATA_PATH)
     
@@ -65,7 +100,7 @@ def main():
     if args.output_path:
         out_path = args.output_path
     else:
-        out_path = os.path.join(os.path.dirname(__file__), '..', 'output', 'eval_result.csv')
+        out_path = "output/results/eval_result.csv"
     
     if os.path.exists(out_path):
         os.remove(out_path)
@@ -81,7 +116,13 @@ def main():
     try:
         classifier = HSClassifier(
             parser_type=args.parser,
-            use_keyword_extraction=args.use_keyword_extraction
+            use_keyword_extraction=args.use_keyword_extraction,
+            use_rerank=args.rerank,
+            rerank_model=args.rerank_model,
+            rerank_top_m=args.rerank_top_m,
+            use_graph_rerank=args.graph_rerank,
+            graph_rerank_model=args.graph_rerank_model,
+            graph_rerank_top_m=args.graph_rerank_top_m
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -118,7 +159,6 @@ def main():
             correct_top5 += int(match_top5)
 
             result_row = {
-                '번호': row['번호'],
                 'GT': gt_hs,
                 'Top1_pred': pred_hs_list[0] if len(pred_hs_list) > 0 else None,
                 'Top3_pred': pred_hs_list[:3],
@@ -134,7 +174,6 @@ def main():
             
         except Exception as e:
             result_row = {
-                '번호': row['번호'],
                 'GT': gt_hs,
                 'Top1_pred': None,
                 'Top3_pred': None,
@@ -159,6 +198,20 @@ def main():
     print(f"Top-3 정확도: {top3_acc:.3f} ({correct_top3}/{total})")
     print(f"Top-5 정확도: {top5_acc:.3f} ({correct_top5}/{total})")
     print(f"상세 결과 저장: {out_path}")
+    
+    # ===== 요약 결과 TXT 저장 =====
+    summary_path = os.path.splitext(out_path)[0] + "_summary.txt"
+    summary_lines = [
+        "=== 평가 결과 요약 ===\n",
+        f"총 샘플 수: {total}\n",
+        f"Top-1 정확도: {top1_acc:.3f} ({correct_top1}/{total})\n",
+        f"Top-3 정확도: {top3_acc:.3f} ({correct_top3}/{total})\n",
+        f"Top-5 정확도: {top5_acc:.3f} ({correct_top5}/{total})\n",
+        f"세부 CSV: {out_path}\n",
+    ]
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.writelines(summary_lines)
+    print(f"요약 결과 저장: {summary_path}")
     
     return 0
 
@@ -189,5 +242,16 @@ python LLM/evaluate.py --parser graph --no-keyword-extraction
 
 # 둘 다 사용
 python LLM/evaluate.py --parser both --no-keyword-extraction
+
+### ReRank 적용 버전 ###
+
+# ChromaDB ReRank 적용
+python LLM/evaluate.py --parser chroma --no-keyword-extraction --rerank
+
+# GraphDB ReRank 적용
+python LLM/evaluate.py --parser graph --no-keyword-extraction --graph-rerank
+
+# 둘 다 ReRank 적용
+python LLM/evaluate.py --parser both --no-keyword-extraction --rerank --graph-rerank
 
 """

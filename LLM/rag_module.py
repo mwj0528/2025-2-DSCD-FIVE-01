@@ -21,6 +21,8 @@ sys.path.append(rag_embedding_dir)
 
 # 임베딩 & ChromaDB 관련
 from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder
+import torch
 import numpy as np
 import chromadb
 from chromadb.config import Settings
@@ -46,6 +48,7 @@ DEFAULT_CHROMA_DIR = os.getenv("CHROMA_DIR", "data/chroma_db")
 DEFAULT_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 DEFAULT_EMBED_MODEL = os.getenv("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 
 # 키워드 추출 관련
 okt_analyzer = Okt()
@@ -174,7 +177,13 @@ class HSClassifier:
         embed_model: str = None,
         openai_model: str = None,
         openai_api_key: str = None,
-        use_keyword_extraction: bool = True
+        use_keyword_extraction: bool = True,
+        use_rerank: bool = False,
+        rerank_model: str = None,
+        rerank_top_m: int = 5,
+        use_graph_rerank: bool = False,
+        graph_rerank_model: str = None,
+        graph_rerank_top_m: int = 5
     ):
         """
         Args:
@@ -192,6 +201,7 @@ class HSClassifier:
         
         self.parser_type = parser_type
         self.use_keyword_extraction = use_keyword_extraction
+        self.use_rerank = bool(use_rerank)
         
         # GraphDB 사용 시 가용성 확인
         if parser_type in ["graph", "both"]:
@@ -203,6 +213,8 @@ class HSClassifier:
         self.collection_name = collection_name or DEFAULT_COLLECTION_NAME
         self.embed_model = embed_model or DEFAULT_EMBED_MODEL
         self.openai_model = openai_model or DEFAULT_OPENAI_MODEL
+        self.rerank_model = rerank_model or DEFAULT_RERANK_MODEL
+        self.rerank_top_m = max(1, int(rerank_top_m)) if isinstance(rerank_top_m, int) else 8
         
         # OpenAI 클라이언트 초기화
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
@@ -213,6 +225,7 @@ class HSClassifier:
         # ChromaDB 관련 초기화 (필요한 경우)
         self._chroma_embedder = None
         self._chroma_collection = None
+        self._reranker = None
         if parser_type in ["chroma", "both"]:
             try:
                 self._chroma_embedder = QueryEmbedder(self.embed_model)
@@ -221,12 +234,24 @@ class HSClassifier:
                 print(f"경고: ChromaDB 초기화 실패: {e}")
                 if parser_type == "chroma":
                     raise
+            # ReRank 초기화 (선택)
+            if self.use_rerank:
+                try:
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    self._reranker = CrossEncoder(self.rerank_model, device=device)
+                except Exception as e:
+                    print(f"경고: ReRank 모델 초기화 실패: {e}")
+                    self._reranker = None
         
         # GraphDB 관련 초기화 (필요한 경우)
         self._graph_rag = None
         if parser_type in ["graph", "both"]:
             try:
-                self._graph_rag = GraphRAG()
+                self._graph_rag = GraphRAG(
+                    use_graph_rerank=use_graph_rerank,
+                    graph_rerank_model=graph_rerank_model,
+                    graph_rerank_top_m=graph_rerank_top_m
+                )
             except Exception as e:
                 print(f"경고: GraphDB 초기화 실패: {e}")
                 if parser_type == "graph":
@@ -244,7 +269,28 @@ class HSClassifier:
             query_for_search = query_text
         
         hits = search_chroma(self._chroma_collection, self._chroma_embedder, query_for_search, top_k=top_k)
+
+        # 선택적 ReRank 적용
+        if self.use_rerank and self._reranker is not None and hits:
+            hits = self._rerank_chroma_hits(query_text, hits, top_m=min(self.rerank_top_m, len(hits)))
         return hits
+
+    def _rerank_chroma_hits(self, query_text: str, hits: List[Dict[str, Any]], top_m: int = 8) -> List[Dict[str, Any]]:
+        """CrossEncoder로 hits를 재정렬하여 상위 top_m만 반환"""
+        try:
+            pairs = [(query_text, (h.get("document") or "")) for h in hits]
+            scores = self._reranker.predict(pairs)
+            for h, s in zip(hits, scores):
+                # re-rank 점수를 추가(높을수록 관련도 높음)
+                try:
+                    h["rerank_score"] = float(s)
+                except Exception:
+                    h["rerank_score"] = 0.0
+            hits.sort(key=lambda d: d.get("rerank_score", 0.0), reverse=True)
+            return hits[:top_m]
+        except Exception as e:
+            print(f"경고: ReRank 중 오류 발생: {e}")
+            return hits[:top_m]
     
     def _get_graph_context(self, query_text: str, k: int = 5) -> str:
         """GraphDB에서 컨텍스트 검색"""
