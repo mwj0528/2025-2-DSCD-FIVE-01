@@ -5,6 +5,8 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from sentence_transformers import CrossEncoder
+import torch
 
 from typing import List, Dict
 
@@ -12,7 +14,7 @@ from typing import List, Dict
 class GraphRAG:
     """HS Code 추천을 위한 Graph RAG 클래스"""
     
-    def __init__(self):
+    def __init__(self, use_graph_rerank: bool = False, graph_rerank_model: str = None, graph_rerank_top_m: int = 5):
         """GraphRAG 인스턴스 초기화"""
         # .env 파일 로드
         load_dotenv()
@@ -23,6 +25,13 @@ class GraphRAG:
         self.NEO4J_PASS = os.getenv("NEO4J_PASS")
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
         self.INDEX_NAME = os.getenv("INDEX_NAME")
+        self.DEFAULT_GRAPH_RERANK_MODEL = os.getenv("GRAPH_RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+        self.use_graph_rerank = bool(use_graph_rerank)
+        self.graph_rerank_model = graph_rerank_model or self.DEFAULT_GRAPH_RERANK_MODEL
+        try:
+            self.graph_rerank_top_m = max(1, int(graph_rerank_top_m))
+        except Exception:
+            self.graph_rerank_top_m = 5
         
         # Neo4j Graph 연결
         self.graph = Neo4jGraph(
@@ -48,6 +57,16 @@ class GraphRAG:
             embedding_node_property="embedding",
         )
 
+        # 선택적 ReRank 초기화
+        self._reranker = None
+        if self.use_graph_rerank:
+            try:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                self._reranker = CrossEncoder(self.graph_rerank_model, device=device)
+            except Exception as e:
+                print(f"경고: Graph ReRank 모델 초기화 실패: {e}")
+                self._reranker = None
+
     def get_vector_candidates(self, user_query: str, k: int = 5) -> List[str]:
         """유사도 순서를 유지하면서 4/6자리 코드만 필터링 후 최대 k개 반환.
         부족하면 점증적으로 검색 범위를 늘려 k개를 최대한 채운다.
@@ -59,28 +78,59 @@ class GraphRAG:
         while True:
             results = self.neo4j_vector_db.similarity_search(user_query, k=current_fetch)
 
-            # 유사도 순서 유지하며 필터링 + 중복 제거
-            ordered_unique: List[str] = []
+            # 기본: 유사도 순서 유지하며 필터링 + 중복 제거
+            base_ordered: List[str] = []
             seen: set = set()
+            filtered_docs = []  # (code, text)
             for doc in results:
                 code = doc.metadata.get("code")
                 if not code:
                     continue
                 if len(code) not in (4, 6):
                     continue
-                if code in seen:
-                    continue
-                seen.add(code)
-                ordered_unique.append(code)
-                if len(ordered_unique) >= k:
-                    break
+                text = getattr(doc, "page_content", "")
+                if code not in seen:
+                    seen.add(code)
+                    base_ordered.append(code)
+                filtered_docs.append((code, text))
 
-            if len(ordered_unique) >= k:
-                return ordered_unique[:k]
+            # ReRank 활성화 시 CrossEncoder로 재정렬
+            if self.use_graph_rerank and self._reranker is not None and filtered_docs:
+                try:
+                    # 같은 코드가 여러 문서에 나타나면 최고 점수 채택
+                    code_to_best_score = {}
+                    pairs = [(user_query, text) for _, text in filtered_docs]
+                    scores = self._reranker.predict(pairs)
+                    for (code, _), s in zip(filtered_docs, scores):
+                        score = float(s) if s is not None else 0.0
+                        if code not in code_to_best_score or score > code_to_best_score[code]:
+                            code_to_best_score[code] = score
+                    reranked = sorted(code_to_best_score.items(), key=lambda x: x[1], reverse=True)
+                    # 상위 graph_rerank_top_m를 우선 사용하되 최종 반환은 최대 k개까지
+                    reranked_codes = [c for c, _ in reranked][:max(self.graph_rerank_top_m, k)]
+                    # 부족 시 기본 순서로 보충
+                    for c in base_ordered:
+                        if len(reranked_codes) >= k:
+                            break
+                        if c not in reranked_codes:
+                            reranked_codes.append(c)
+                    if len(reranked_codes) >= k:
+                        return reranked_codes[:k]
+                    # 그래도 부족하면 계속 fetch 확대
+                except Exception as e:
+                    print(f"경고: Graph ReRank 중 오류: {e}")
+
+            # ReRank 미사용 또는 불충분 시 기본 순서 반환 시도
+            if len(base_ordered) >= k:
+                return base_ordered[:k]
 
             # 더 가져와도 증가가 없거나 상한 도달 시 종료
             if len(results) == last_count or current_fetch >= max_fetch:
-                return ordered_unique
+                # 마지막으로 가능한 만큼 반환
+                if self.use_graph_rerank and self._reranker is not None:
+                    # 위에서 이미 시도했으므로 base_ordered 반환
+                    return base_ordered
+                return base_ordered
 
             last_count = len(results)
             current_fetch = min(current_fetch * 2, max_fetch)
