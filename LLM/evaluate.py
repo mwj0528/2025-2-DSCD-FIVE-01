@@ -196,10 +196,10 @@ def main():
                      # (D) RAG가 제공한 컨텍스트 (Context)
                     vec_D_context = eval_model.encode(rag_context_str)
 
-                     # (방법 2) 입력-근거 충실도 (A vs C)
+                     #  입력-근거 충실도 (A vs C)
                     score_input_reason = util.cos_sim(vec_A_input, vec_C_reason)[0][0].item()
  
-                     # (방법 3) RAG-근거 충실도 (C vs D)
+                     #  RAG-근거 충실도 (C vs D)
                     score_groundedness = util.cos_sim(vec_C_reason, vec_D_context)[0][0].item()
 
                     total_score_input_reason += score_input_reason
