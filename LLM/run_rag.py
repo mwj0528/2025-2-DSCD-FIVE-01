@@ -9,6 +9,19 @@ import argparse
 import os
 from rag_module import HSClassifier, ParserType, set_all_seeds
 
+EMBED_MODEL_CHOICES = {
+    "openai_small": "text-embedding-3-small",
+    "openai_large": "text-embedding-3-large",
+    "paraphrase-multilingual-minilm-l12-v2": "paraphrase-multilingual-MiniLM-L12-v2",
+    "intfloat/multilingual-e5-small": "intfloat/multilingual-e5-small",
+}
+
+EMBED_CHROMA_DIR = {
+    "openai_small": "data/chroma_db_openai_small_kw",
+    "openai_large": "data/chroma_db_openai_large_kw",
+    "intfloat/multilingual-e5-small": "data/chroma_db_e5_small_kw",
+}
+
 
 def main():
     """메인 실행 함수"""
@@ -184,6 +197,13 @@ def main():
         default=5,
         help="Listwise 최종 상위 문서 수 (기본: 5)"
     )
+    parser.add_argument(
+        "--embed-model",
+        type=str,
+        choices=list(EMBED_MODEL_CHOICES.keys()),
+        default="paraphrase-multilingual-minilm-l12-v2",
+        help="쿼리 임베딩에 사용할 모델 선택",
+    )
     # Graph 하이브리드는 공통 스위치(--hybrid-rrf)와 공통 K(--bm25-k, --rrf-k)를 그대로 사용합니다
     
     args = parser.parse_args()
@@ -196,8 +216,12 @@ def main():
     
     # HSClassifier 인스턴스 생성
     print(f"=== HS Code 분류 시스템 초기화 ===")
+    resolved_chroma_dir = args.chroma_dir or EMBED_CHROMA_DIR.get(args.embed_model)
     print(f"Parser 설정: {args.parser}")
     print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
+    print(f"임베딩 모델: {args.embed_model}")
+    if resolved_chroma_dir:
+        print(f"ChromaDB 디렉터리: {resolved_chroma_dir}")
     print(f"상품명: {args.name}")
     print(f"상품설명: {args.desc}")
     print()
@@ -210,8 +234,9 @@ def main():
     try:
         classifier = HSClassifier(
             parser_type=args.parser,
-            chroma_dir=args.chroma_dir,
+            chroma_dir=resolved_chroma_dir or args.chroma_dir,
             collection_name=args.collection_name,
+            embed_model=EMBED_MODEL_CHOICES[args.embed_model],
             use_keyword_extraction=args.use_keyword_extraction,
             use_rrf_hybrid=unified_hybrid,
             bm25_k=unified_bm25_k,
@@ -325,7 +350,7 @@ if __name__ == "__main__":
   python LLM/run_rag.py --parser graph --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈"
   
   # 둘 다 사용
-  python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈"
+  python LLM/run_rag.py --parser both --embed-model intfloat/multilingual-e5-small --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈"
 
 
  ### 영어 번역 버전 ###
