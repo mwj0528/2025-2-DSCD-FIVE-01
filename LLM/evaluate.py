@@ -8,6 +8,19 @@ import numpy as np
 import torch
 from rag_module import HSClassifier, set_all_seeds
 
+EMBED_MODEL_CHOICES = {
+    "openai_small": "text-embedding-3-small",
+    "openai_large": "text-embedding-3-large",
+    "paraphrase-multilingual-minilm-l12-v2": "paraphrase-multilingual-MiniLM-L12-v2",
+    "intfloat/multilingual-e5-small": "intfloat/multilingual-e5-small",
+}
+
+EMBED_CHROMA_DIR = {
+    "openai_small": "data/chroma_db_openai_small_kw",
+    "openai_large": "data/chroma_db_openai_large_kw",
+    "intfloat/multilingual-e5-small": "data/chroma_db_e5_small_kw",
+}
+
 def main():
     # ===== 커맨드라인 인자 파싱 =====
     parser = argparse.ArgumentParser(description="HS Code 분류 RAG 평가 스크립트")
@@ -147,6 +160,13 @@ def main():
         action="store_true",
         help="사용자 입력을 영어로 번역하여 RAG 검색 수행 (기본: 미사용)"
     )
+    parser.add_argument(
+        "--embed-model",
+        type=str,
+        choices=list(EMBED_MODEL_CHOICES.keys()),
+        default="paraphrase-multilingual-minilm-l12-v2",
+        help="쿼리 임베딩에 사용할 SentenceTransformer/OpenAI 모델",
+    )
     
     args = parser.parse_args()
     
@@ -188,8 +208,12 @@ def main():
     # ===== HSClassifier 초기화 =====
     print(f"=== HS Code 분류 평가 시작 ===")
     print(f"Parser 설정: {args.parser}")
+    resolved_chroma_dir = EMBED_CHROMA_DIR.get(args.embed_model)
     print(f"키워드 추출: {'사용' if args.use_keyword_extraction else '미사용'}")
     print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
+    print(f"임베딩 모델: {args.embed_model}")
+    if resolved_chroma_dir:
+        print(f"ChromaDB 디렉터리: {resolved_chroma_dir}")
     if args.hierarchical_3stage:
         print(f"계층적 모드: 3단계 사용")
     elif args.hierarchical:
@@ -213,6 +237,8 @@ def main():
     try:
         classifier = HSClassifier(
             parser_type=args.parser,
+            chroma_dir=resolved_chroma_dir,
+            embed_model=EMBED_MODEL_CHOICES[args.embed_model],
             use_keyword_extraction=args.use_keyword_extraction,
             use_rrf_hybrid=unified_hybrid,
             bm25_k=unified_bm25_k,
@@ -399,6 +425,23 @@ python LLM/evaluate.py --parser graph --output-path "output/results/graphDB+inpu
 python LLM/evaluate.py --parser both --output-path "output/results/base_1117/eval_result.csv"
 
 
+### openai_small 임베딩 모델 사용 버전 ###
+# 둘 다 사용
+python LLM/evaluate.py --parser both --embed-model openai_small --output-path "output/results/base_openai_small_1117/eval_result.csv"
+
+
+### openai_large 임베딩 모델 사용 버전 ###
+# 둘 다 사용
+python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1117/eval_result.csv"
+
+# 2stage
+python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_1117/eval_result.csv"
+
+### e5_small 임베딩 모델 사용 버전 ###
+# 둘 다 사용
+python LLM/evaluate.py --parser both --embed-model intfloat/multilingual-e5-small --output-path "output/results/base_e5_small_1117/eval_result.csv"
+
+
 ### 영어 번역 버전 ###
 
 # ChromaDB만 사용
@@ -454,6 +497,9 @@ python LLM/evaluate.py --parser both --hierarchical --output-path "output/result
 
 # 계층적 모드 + ReRank
 python LLM/evaluate.py --parser both --hierarchical --rerank --graph-rerank --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 --output-path "output/results/hierarchical_2stage+rerank/eval_result_hierarchical_rerank.csv"
+
+# 계층적 모드 + 영어
+python LLM/evaluate.py --parser both --hierarchical --translate-to-english --output-path "output/results/hierarchical_2stage+translate/eval_result_hierarchical_translate.csv"
 
 # 계층적 모드 + Hybrid Search
 python LLM/evaluate.py --parser both --hierarchical --hybrid-rrf --output-path "output/results/hierarchical_2stage+hybrid/eval_result_hierarchical_hybrid.csv"

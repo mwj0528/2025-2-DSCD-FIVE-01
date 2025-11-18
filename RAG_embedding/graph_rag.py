@@ -6,12 +6,12 @@ from langchain_neo4j import Neo4jGraph
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from sentence_transformers import CrossEncoder
 import torch
 from rank_bm25 import BM25Okapi
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 # ===== 재현성을 위한 랜덤 시드 설정 =====
@@ -41,11 +41,24 @@ def set_all_seeds(seed: int = 42):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 
+def _is_openai_embedding_model(model_name: Optional[str]) -> bool:
+    return bool(model_name) and model_name.startswith("text-embedding-")
+
+
 class GraphRAG:
     """HS Code 추천을 위한 Graph RAG 클래스"""
     
-    def __init__(self, use_graph_rerank: bool = False, graph_rerank_model: str = None, graph_rerank_top_m: int = 5,
-                 use_graph_hybrid_rrf: bool = False, graph_bm25_k: int = 5, graph_rrf_k: int = 60):
+    def __init__(
+        self,
+        use_graph_rerank: bool = False,
+        graph_rerank_model: str = None,
+        graph_rerank_top_m: int = 5,
+        use_graph_hybrid_rrf: bool = False,
+        graph_bm25_k: int = 5,
+        graph_rrf_k: int = 60,
+        graph_embed_model: Optional[str] = None,
+        graph_openai_api_key: Optional[str] = None,
+    ):
         """GraphRAG 인스턴스 초기화"""
         # .env 파일 로드
         load_dotenv()
@@ -86,9 +99,20 @@ class GraphRAG:
         )
         
         # Vector DB 설정
-        self.MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        self.embedding_model = SentenceTransformerEmbeddings(model_name=self.MODEL_NAME,
-                                encode_kwargs={"normalize_embeddings": True})
+        default_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        self.MODEL_NAME = graph_embed_model or default_model
+        if _is_openai_embedding_model(self.MODEL_NAME):
+            api_key = graph_openai_api_key or self.OPENAI_API_KEY
+            if not api_key:
+                raise ValueError(
+                    f"OpenAI 임베딩 모델 '{self.MODEL_NAME}' 사용을 위해 OPENAI_API_KEY 또는 전용 키를 설정하세요."
+                )
+            self.embedding_model = OpenAIEmbeddings(model=self.MODEL_NAME, api_key=api_key)
+        else:
+            self.embedding_model = SentenceTransformerEmbeddings(
+                model_name=self.MODEL_NAME,
+                encode_kwargs={"normalize_embeddings": True}
+            )
         
         # Neo4j Vector DB 인스턴스 생성
         self.neo4j_vector_db = Neo4jVector.from_existing_graph(
