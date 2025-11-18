@@ -114,6 +114,10 @@ DEFAULT_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 DEFAULT_EMBED_MODEL = os.getenv("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+OPENAI_EMBED_ENV_MAP = {
+    "text-embedding-3-small": os.getenv("OPENAI_SMALL_EMBED_API_KEY"),
+    "text-embedding-3-large": os.getenv("OPENAI_LARGE_EMBED_API_KEY"),
+}
 
 # 키워드 추출 관련
 okt_analyzer = Okt()
@@ -212,19 +216,72 @@ def _parse_json_safely(text: str):
 
 
 # ===== ChromaDB 관련 클래스 및 함수 =====
+def _is_openai_embedding_model(model_name: str) -> bool:
+    return model_name.startswith("text-embedding-")
+
+
+def _resolve_openai_embed_api_key(model_name: str) -> Optional[str]:
+    if not _is_openai_embedding_model(model_name):
+        return None
+    return OPENAI_EMBED_ENV_MAP.get(model_name) or os.getenv("OPENAI_API_KEY")
+
+
+def _chunk_list(items: List[str], chunk_size: int):
+    for idx in range(0, len(items), chunk_size):
+        yield items[idx: idx + chunk_size]
+
+
 class QueryEmbedder:
     def __init__(self, model_name: str = DEFAULT_EMBED_MODEL, device: str = "cpu"):
-        self.model = SentenceTransformer(model_name, device=device)
+        self.model_name = model_name
+        self.device = device
         self.normalize = True
 
+        if _is_openai_embedding_model(model_name):
+            self.provider = "openai"
+            self._init_openai_embedder()
+        else:
+            self.provider = "sentence_transformer"
+            self.model = SentenceTransformer(model_name, device=device)
+
+    def _init_openai_embedder(self) -> None:
+        key = _resolve_openai_embed_api_key(self.model_name)
+        if not key:
+            raise ValueError(
+                f"OpenAI 임베딩 모델 '{self.model_name}' 사용을 위해 OPENAI_API_KEY 또는 "
+                f"전용 키(OPENAI_SMALL_EMBED_API_KEY 등)를 설정하세요."
+            )
+        self.client = OpenAI(api_key=key)
+        self.openai_batch = int(os.getenv("OPENAI_EMBED_BATCH", "16"))
+
     def embed(self, texts: List[str]) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, 0), dtype="float32")
+
+        if self.provider == "openai":
+            return self._embed_with_openai(texts)
+
         vecs = self.model.encode(
             texts,
             batch_size=32,
             show_progress_bar=False,
-            normalize_embeddings=self.normalize
+            normalize_embeddings=self.normalize,
         )
         return np.asarray(vecs, dtype="float32")
+
+    def _embed_with_openai(self, texts: List[str]) -> np.ndarray:
+        vectors: List[np.ndarray] = []
+        for chunk in _chunk_list(texts, self.openai_batch):
+            response = self.client.embeddings.create(
+                model=self.model_name,
+                input=chunk,
+            )
+            chunk_vecs = [
+                np.asarray(item.embedding, dtype="float32")
+                for item in response.data
+            ]
+            vectors.extend(chunk_vecs)
+        return np.stack(vectors, axis=0)
 
 
 def open_chroma_collection(persist_dir: str, collection_name: str):
@@ -402,7 +459,9 @@ class HSClassifier:
                     graph_rerank_top_m=graph_rerank_top_m,
                     use_graph_hybrid_rrf=getattr(self, 'use_rrf_hybrid', False),
                     graph_bm25_k=getattr(self, 'bm25_k', 5),
-                    graph_rrf_k=getattr(self, 'rrf_k', 60)
+                    graph_rrf_k=getattr(self, 'rrf_k', 60),
+                    graph_embed_model=self.embed_model,
+                    graph_openai_api_key=_resolve_openai_embed_api_key(self.embed_model)
                 )
             except Exception as e:
                 print(f"경고: GraphDB 초기화 실패: {e}")
