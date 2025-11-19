@@ -386,6 +386,8 @@ if __name__ == "__main__":
   # 계층적 3단계 모드 (GraphDB 또는 both 필요)
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical-3stage
 
+  ### embed model openai_large 버전 ###
+  python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical --embed-model openai_large
 
   ### ReRank 적용 버전 ###
 
@@ -399,4 +401,7 @@ if __name__ == "__main__":
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --rerank --graph-rerank
 
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical --top-n 5
-"""
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "오실로스코프(oscilloscope)와 오실로그래프(oscillograph)" --desc "(전자계측기). 대분류: Instruments, apparatus for measuring, checking electrical quantities not meters of heading no. 9028; instruments, apparatus for measuring or detecting alpha, beta, gamma, x-ray, cosmic and other radiations. 중분류: Oscilloscopes and oscillographs."
+
+ """
