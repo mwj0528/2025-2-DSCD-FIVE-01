@@ -6,6 +6,7 @@ from tqdm import tqdm
 import random
 import numpy as np
 import torch
+import json
 from rag_module import HSClassifier, set_all_seeds
 
 EMBED_MODEL_CHOICES = {
@@ -167,6 +168,11 @@ def main():
         default="paraphrase-multilingual-minilm-l12-v2",
         help="쿼리 임베딩에 사용할 SentenceTransformer/OpenAI 모델",
     )
+    parser.add_argument(
+        "--reason",
+        action="store_true",
+        help="CSV에 RAG context 정보 저장 (기본: 미저장)"
+    )
     
     args = parser.parse_args()
     
@@ -204,6 +210,13 @@ def main():
     
     if os.path.exists(out_path):
         os.remove(out_path)
+    
+    # JSON 파일 경로 (--reason 옵션이 있을 때만)
+    json_path = None
+    if args.reason:
+        json_path = os.path.splitext(out_path)[0] + "_context.json"
+        if os.path.exists(json_path):
+            os.remove(json_path)
     
     # ===== HSClassifier 초기화 =====
     print(f"=== HS Code 분류 평가 시작 ===")
@@ -273,6 +286,8 @@ def main():
         'Top5': {k: 0 for k in prefix_lengths},
     }
     results = []
+    # context 확인을 위한 샘플 출력 개수 (--reason 옵션이 있을 때만)
+    context_sample_count = 3 if args.reason else 0
     
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="평가 진행"):
         prod_name = str(row[PRODUCT_NAME_COL])
@@ -335,33 +350,244 @@ def main():
                 prefix_correct['Top3'][k] += int(any_prefix_match(gt_clean, top3_list, k))
                 prefix_correct['Top5'][k] += int(any_prefix_match(gt_clean, top5_list, k))
 
+            # context 정보 추출 (--reason 옵션이 있을 때만)
+            # 리스트를 문자열로 변환 (세미콜론으로 구분)
+            top3_pred_str = ';'.join(pred_hs_list[:3]) if len(pred_hs_list) >= 3 else ';'.join(pred_hs_list)
+            top5_pred_str = ';'.join(pred_hs_list[:5]) if len(pred_hs_list) >= 5 else ';'.join(pred_hs_list)
+            
             result_row = {
                 'GT': gt_hs,
-                'Top1_pred': pred_hs_list[0] if len(pred_hs_list) > 0 else None,
-                'Top3_pred': pred_hs_list[:3],
-                'Top5_pred': pred_hs_list,
+                'Top1_pred': pred_hs_list[0] if len(pred_hs_list) > 0 else '',
+                'Top3_pred': top3_pred_str,
+                'Top5_pred': top5_pred_str,
                 'Top1_match': match_top1,
                 'Top3_match': match_top3,
                 'Top5_match': match_top5
             }
+            
+            # context 정보는 JSON에 저장 (--reason 옵션이 있을 때만)
+            if args.reason:
+                context_entry = {
+                    'index': int(idx),
+                    'product_name': prod_name,
+                    'product_description': prod_desc,
+                    'GT': gt_hs,
+                    'Top1_pred': pred_hs_list[0] if len(pred_hs_list) > 0 else '',
+                    'Top3_pred': pred_hs_list[:3],
+                    'Top5_pred': pred_hs_list[:5]
+                }
+                
+                # 계층적 모드인 경우 각 단계의 context 저장
+                if args.hierarchical_3stage:
+                    # 3단계: step1, step2, step3 모두 저장
+                    chroma_ctx_step1 = pred.get('chromaDB_context_step1', '')
+                    graph_ctx_step1 = pred.get('graphDB_context_step1', '')
+                    chroma_ctx_step2 = pred.get('chromaDB_context_step2', '')
+                    graph_ctx_step2 = pred.get('graphDB_context_step2', '')
+                    chroma_ctx_step3 = pred.get('chromaDB_context_step3', '')
+                    graph_ctx_step3 = pred.get('graphDB_context_step3', '')
+                    
+                    context_entry['step1'] = {
+                        'chromaDB_context': chroma_ctx_step1,
+                        'graphDB_context': graph_ctx_step1
+                    }
+                    context_entry['step2'] = {
+                        'chromaDB_context': chroma_ctx_step2,
+                        'graphDB_context': graph_ctx_step2
+                    }
+                    context_entry['step3'] = {
+                        'chromaDB_context': chroma_ctx_step3,
+                        'graphDB_context': graph_ctx_step3
+                    }
+                    
+                    # 처음 몇 개 샘플의 context 출력
+                    if idx < context_sample_count:
+                        print(f"\n=== 샘플 {idx+1}: Context 확인 ===")
+                        print(f"상품명: {prod_name[:50]}...")
+                        print(f"GT: {gt_hs}")
+                        print(f"\n[1단계 - 4자리 예측]")
+                        print(f"  ChromaDB context 길이: {len(chroma_ctx_step1)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_ctx_step1)} 문자")
+                        if chroma_ctx_step1:
+                            print(f"  ChromaDB context 미리보기: {chroma_ctx_step1[:200]}...")
+                        if graph_ctx_step1:
+                            print(f"  GraphDB context 미리보기: {graph_ctx_step1[:200]}...")
+                        print(f"\n[2단계 - 6자리 예측]")
+                        print(f"  ChromaDB context 길이: {len(chroma_ctx_step2)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_ctx_step2)} 문자")
+                        if chroma_ctx_step2:
+                            print(f"  ChromaDB context 미리보기: {chroma_ctx_step2[:200]}...")
+                        if graph_ctx_step2:
+                            print(f"  GraphDB context 미리보기: {graph_ctx_step2[:200]}...")
+                        print(f"\n[3단계 - 10자리 예측]")
+                        print(f"  ChromaDB context 길이: {len(chroma_ctx_step3)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_ctx_step3)} 문자")
+                        if chroma_ctx_step3:
+                            print(f"  ChromaDB context 미리보기: {chroma_ctx_step3[:200]}...")
+                        if graph_ctx_step3:
+                            print(f"  GraphDB context 미리보기: {graph_ctx_step3[:200]}...")
+                        print()
+                elif args.hierarchical:
+                    # 2단계: step1, step2 모두 저장
+                    chroma_ctx_step1 = pred.get('chromaDB_context_step1', '')
+                    graph_ctx_step1 = pred.get('graphDB_context_step1', '')
+                    chroma_ctx_step2 = pred.get('chromaDB_context_step2', '')
+                    graph_ctx_step2 = pred.get('graphDB_context_step2', '')
+                    
+                    context_entry['step1'] = {
+                        'chromaDB_context': chroma_ctx_step1,
+                        'graphDB_context': graph_ctx_step1
+                    }
+                    context_entry['step2'] = {
+                        'chromaDB_context': chroma_ctx_step2,
+                        'graphDB_context': graph_ctx_step2
+                    }
+                    
+                    # 처음 몇 개 샘플의 context 출력
+                    if idx < context_sample_count:
+                        print(f"\n=== 샘플 {idx+1}: Context 확인 ===")
+                        print(f"상품명: {prod_name[:50]}...")
+                        print(f"GT: {gt_hs}")
+                        print(f"\n[1단계 - 6자리 예측]")
+                        print(f"  ChromaDB context 길이: {len(chroma_ctx_step1)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_ctx_step1)} 문자")
+                        if chroma_ctx_step1:
+                            print(f"  ChromaDB context 미리보기: {chroma_ctx_step1[:200]}...")
+                        if graph_ctx_step1:
+                            print(f"  GraphDB context 미리보기: {graph_ctx_step1[:200]}...")
+                        print(f"\n[2단계 - 10자리 예측]")
+                        print(f"  ChromaDB context 길이: {len(chroma_ctx_step2)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_ctx_step2)} 문자")
+                        if chroma_ctx_step2:
+                            print(f"  ChromaDB context 미리보기: {chroma_ctx_step2[:200]}...")
+                        if graph_ctx_step2:
+                            print(f"  GraphDB context 미리보기: {graph_ctx_step2[:200]}...")
+                        print()
+                else:
+                    # 일반 모드
+                    chroma_context = pred.get('chromaDB_context', '')
+                    graph_context = pred.get('graphDB_context', '')
+                    
+                    context_entry['chromaDB_context'] = chroma_context
+                    context_entry['graphDB_context'] = graph_context
+                    
+                    # 처음 몇 개 샘플의 context 출력
+                    if idx < context_sample_count:
+                        print(f"\n=== 샘플 {idx+1}: Context 확인 ===")
+                        print(f"상품명: {prod_name[:50]}...")
+                        print(f"GT: {gt_hs}")
+                        print(f"  ChromaDB context 길이: {len(chroma_context)} 문자")
+                        print(f"  GraphDB context 길이: {len(graph_context)} 문자")
+                        if chroma_context:
+                            print(f"  ChromaDB context 미리보기: {chroma_context[:200]}...")
+                        if graph_context:
+                            print(f"  GraphDB context 미리보기: {graph_context[:200]}...")
+                        print()
+                
+                # JSON 파일에 한 개씩 저장 (pretty print 형식, 각 속성 줄넘김)
+                # 문자열 내부의 \n을 실제 줄넘김으로 변환 (JSON 표준은 아니지만 보기 좋게)
+                if json_path:
+                    def convert_newlines_in_strings(obj):
+                        """문자열 내부의 \n을 실제 줄넘김으로 변환"""
+                        if isinstance(obj, dict):
+                            return {k: convert_newlines_in_strings(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [convert_newlines_in_strings(item) for item in obj]
+                        elif isinstance(obj, str):
+                            # \\n (이스케이프된 줄넘김)을 실제 줄넘김으로 변환
+                            return obj.replace('\\n', '\n')
+                        return obj
+                    
+                    # JSON 문자열로 변환
+                    json_str = json.dumps(context_entry, ensure_ascii=False, indent=2)
+                    # JSON 문자열 내부의 이스케이프된 \n을 실제 줄넘김으로 변환
+                    # 하지만 JSON 문자열 값 내부의 \n만 변환해야 함
+                    import re
+                    # JSON 문자열 값 내부의 \\n을 실제 줄넘김으로 변환
+                    # "key": "value\\nmore" -> "key": "value\nmore"
+                    json_str = re.sub(r'(?<!\\)\\(?!["\\/bfnrt])', '', json_str)  # 잘못된 이스케이프 제거
+                    json_str = json_str.replace('\\n', '\n')  # 모든 \n을 실제 줄넘김으로
+                    
+                    with open(json_path, 'a', encoding='utf-8') as f:
+                        f.write(json_str)
+                        f.write('\n\n')  # 객체 사이에 빈 줄 추가
+            
             results.append(result_row)
 
             # 즉시 한 줄씩 결과 저장(append), 헤더는 최초 1회만
-            pd.DataFrame([result_row]).to_csv(out_path, mode='a', header=not os.path.exists(out_path) or idx == 0, index=False)
+            # 파일이 존재하지 않을 때만 utf-8-sig (BOM 포함) 사용하여 Excel 호환성 확보
+            encoding = 'utf-8-sig' if not os.path.exists(out_path) else 'utf-8'
+            # CSV 저장 시 줄바꿈과 특수문자 처리 (quoting=1은 QUOTE_ALL)
+            pd.DataFrame([result_row]).to_csv(
+                out_path, 
+                mode='a', 
+                header=not os.path.exists(out_path) or idx == 0, 
+                index=False, 
+                encoding=encoding,
+                quoting=1,  # QUOTE_ALL: 모든 필드를 따옴표로 감싸기
+                escapechar=None  # 기본 이스케이프 사용
+            )
             
         except Exception as e:
             result_row = {
                 'GT': gt_hs,
-                'Top1_pred': None,
-                'Top3_pred': None,
-                'Top5_pred': None,
+                'Top1_pred': '',
+                'Top3_pred': '',
+                'Top5_pred': '',
                 'Top1_match': False,
                 'Top3_match': False,
                 'Top5_match': False,
                 'error': str(e)
             }
+            # 에러 발생 시에도 context 데이터에 추가 (--reason 옵션이 있을 때만)
+            if args.reason:
+                context_entry = {
+                    'index': int(idx),
+                    'product_name': prod_name,
+                    'product_description': prod_desc,
+                    'GT': gt_hs,
+                    'error': str(e)
+                }
+                # JSON 파일에 한 개씩 저장 (pretty print 형식, 각 속성 줄넘김)
+                # 문자열 내부의 \n을 실제 줄넘김으로 변환 (JSON 표준은 아니지만 보기 좋게)
+                if json_path:
+                    def convert_newlines_in_strings(obj):
+                        """문자열 내부의 \n을 실제 줄넘김으로 변환"""
+                        if isinstance(obj, dict):
+                            return {k: convert_newlines_in_strings(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [convert_newlines_in_strings(item) for item in obj]
+                        elif isinstance(obj, str):
+                            # \\n (이스케이프된 줄넘김)을 실제 줄넘김으로 변환
+                            return obj.replace('\\n', '\n')
+                        return obj
+                    
+                    # JSON 문자열로 변환
+                    json_str = json.dumps(context_entry, ensure_ascii=False, indent=2)
+                    # JSON 문자열 내부의 이스케이프된 \n을 실제 줄넘김으로 변환
+                    # 하지만 JSON 문자열 값 내부의 \n만 변환해야 함
+                    import re
+                    # JSON 문자열 값 내부의 \\n을 실제 줄넘김으로 변환
+                    # "key": "value\\nmore" -> "key": "value\nmore"
+                    json_str = re.sub(r'(?<!\\)\\(?!["\\/bfnrt])', '', json_str)  # 잘못된 이스케이프 제거
+                    json_str = json_str.replace('\\n', '\n')  # 모든 \n을 실제 줄넘김으로
+                    
+                    with open(json_path, 'a', encoding='utf-8') as f:
+                        f.write(json_str)
+                        f.write('\n\n')  # 객체 사이에 빈 줄 추가
             results.append(result_row)
-            pd.DataFrame([result_row]).to_csv(out_path, mode='a', header=not os.path.exists(out_path) or idx == 0, index=False)
+            # 파일이 존재하지 않을 때만 utf-8-sig (BOM 포함) 사용하여 Excel 호환성 확보
+            encoding = 'utf-8-sig' if not os.path.exists(out_path) else 'utf-8'
+            # CSV 저장 시 줄바꿈과 특수문자 처리 (quoting=1은 QUOTE_ALL)
+            pd.DataFrame([result_row]).to_csv(
+                out_path, 
+                mode='a', 
+                header=not os.path.exists(out_path) or idx == 0, 
+                index=False, 
+                encoding=encoding,
+                quoting=1,  # QUOTE_ALL: 모든 필드를 따옴표로 감싸기
+                escapechar=None  # 기본 이스케이프 사용
+            )
     
     # ===== 결과 집계 및 출력 =====
     total = len(df)
@@ -375,6 +601,10 @@ def main():
     print(f"Top-3 정확도: {top3_acc:.3f} ({correct_top3}/{total})")
     print(f"Top-5 정확도: {top5_acc:.3f} ({correct_top5}/{total})")
     print(f"상세 결과 저장: {out_path}")
+    
+    # JSON 파일 저장 완료 메시지 (--reason 옵션이 있을 때만)
+    if args.reason and json_path:
+        print(f"Context 정보 저장: {json_path} (Pretty print 형식, 각 속성 줄넘김, 한 개씩 저장됨)")
     
     # ===== 요약 결과 TXT 저장 =====
     summary_path = os.path.splitext(out_path)[0] + "_summary.txt"
@@ -413,116 +643,11 @@ if __name__ == "__main__":
 
 """
 
-### Input 키워드 추출하는 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --output-path "output/results/ChromaDB_keyword+input_keyword_1031/eval_result.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --output-path "output/results/graphDB+input_keyword_1031/eval_result.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --output-path "output/results/base_1117/eval_result.csv"
-
-
-### openai_small 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model openai_small --output-path "output/results/base_openai_small_1117/eval_result.csv"
-
 
 ### openai_large 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1117/eval_result.csv"
 
 # 2stage
-python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_1117/eval_result.csv"
-
-### e5_small 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model intfloat/multilingual-e5-small --output-path "output/results/base_e5_small_1117/eval_result.csv"
-
-
-### 영어 번역 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --translate-to-english --output-path "output/results/ChromaDB_translate_1117/eval_result.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --translate-to-english --output-path "output/results/graphDB_translate_1117/eval_result.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --translate-to-english --output-path "output/results/base_translate_1117/eval_result.csv"
-
-
-### Input 키워드 추출 사용 안 하는 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --no-keyword-extraction --output-path "output/results/no_keyword_input_chroma_1031/eval_result.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --no-keyword-extraction --output-path "output/results/no_keyword_input_graph_1031/eval_result.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --no-keyword-extraction --output-path "output/results/no_keyword_input_both_1031/eval_result.csv"
-
-### ReRank 적용 버전 ###
-
-# 둘 다 ReRank 적용
-python LLM/evaluate.py --parser both --rerank --chroma-top-k 5 --rerank-top-m 5 --graph-k 5 --graph-rerank-top-m 5 --output-path "output/results/base+rerank_1104/eval_result_rerank.csv"
-
-### hybrid search 적용 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --hybrid-rrf --output-path "output/results/base+chroma_hybrid_1031/eval_result_hybrid.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --hybrid-rrf --output-path "output/results/base+graph_hybrid_1031/eval_result_hybrid.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --hybrid-rrf --output-path "output/results/base+hybrid_1117/eval_result_hybrid.csv"
-
-
-### Rerank + Hybrid Search 적용 버전 ###
-python LLM/evaluate.py --parser both --rerank --graph-rerank \
-    --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 \
-    --hybrid-rrf --output-path "output/results/base+rerank_hybrid_1031/eval_result_rerank_hybrid.csv"
-
-# LLM ReRank + Hybrid Search 적용 버전
-python LLM/evaluate.py --parser both --hybrid-rrf --bm25-k 5 --rrf-k 60 --llm-listwise --llm-listwise-max-cand 16 --llm-listwise-window 10 --llm-listwise-step 5 --llm-listwise-top-m 5 --chroma-top-k 10 --graph-k 8 --output-path "output/results/llm_rerank_hybrid_1031/eval_result_llm_rerank_hybrid.csv"
-
-### 계층적 2단계 RAG 버전 ###
-
-# 계층적 모드 (GraphDB 또는 both 필요)
-python LLM/evaluate.py --parser both --hierarchical --output-path "output/results/hierarchical_2stage/eval_result_hierarchical.csv"
-
-# 계층적 모드 + ReRank
-python LLM/evaluate.py --parser both --hierarchical --rerank --graph-rerank --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 --output-path "output/results/hierarchical_2stage+rerank/eval_result_hierarchical_rerank.csv"
-
-# 계층적 모드 + 영어
-python LLM/evaluate.py --parser both --hierarchical --translate-to-english --output-path "output/results/hierarchical_2stage+translate/eval_result_hierarchical_translate.csv"
-
-# 계층적 모드 + Hybrid Search
-python LLM/evaluate.py --parser both --hierarchical --hybrid-rrf --output-path "output/results/hierarchical_2stage+hybrid/eval_result_hierarchical_hybrid.csv"
-
-# 계층적 모드 + Hybrid Search + 영어 번역
-python LLM/evaluate.py --parser both --hierarchical --hybrid-rrf --translate-to-english --output-path "output/results/hierarchical_2stage+hybrid+translate+[]/eval_result_hierarchical_hybrid_translate.csv"
-
-
-### 계층적 3단계 RAG 버전 ###
-
-# 계층적 3단계 모드 (GraphDB 또는 both 필요)
-python LLM/evaluate.py --parser both --hierarchical-3stage --output-path "output/results/hierarchical_3stage/eval_result_hierarchical_3stage.csv"
-
-# 계층적 3단계 모드 + ReRank
-python LLM/evaluate.py --parser both --hierarchical-3stage --rerank --graph-rerank --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 --output-path "output/results/hierarchical_3stage+rerank/eval_result_hierarchical_3stage_rerank.csv"
-
-# 계층적 3단계 모드 + Hybrid Search
-python LLM/evaluate.py --parser both --hierarchical-3stage --hybrid-rrf --output-path "output/results/hierarchical_3stage+hybrid/eval_result_hierarchical_3stage_hybrid.csv"
-
-python LLM/evaluate.py --parser both --hierarchical-3stage --embed-model openai_large --output-path "output/results/hierarchical_3stage_openai_large/eval_result_hierarchical_3stage.csv"
-
-# 2stage openai_large case eval dataset 버전
-python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --data-path "data/only_case_100sample_1118.csv" --output-path "output/results/hierarchical_2stage_openai_large_casedataset_1118/eval_result_hierarchical_2stage.csv"
+python LLM/evaluate_and_reason.py --parser both --hierarchical --embed-model openai_large --reason --output-path "output/results/hierarchical_2stage_openai_large_reason_1119/eval_result.csv"
 
 
 """

@@ -467,6 +467,9 @@ class HSClassifier:
                 print(f"경고: GraphDB 초기화 실패: {e}")
                 if parser_type == "graph":
                     raise
+        
+        # HS Code 통칙 로드 및 캐싱
+        self.hscode_rules = self._load_hscode_rules()
     
     def _get_chroma_context(self, query_text: str, top_k: int = 8) -> List[Dict[str, Any]]:
         """ChromaDB에서 컨텍스트 검색"""
@@ -757,6 +760,19 @@ class HSClassifier:
 
         return "\n\n".join(blocks) if blocks else "(검색 결과 없음)"
     
+    def _load_hscode_rules(self) -> str:
+        """HS Code 통칙 파일을 읽어서 반환"""
+        rules_file_path = os.path.join(current_dir, 'hscode_rule.txt')
+        try:
+            with open(rules_file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            print(f"경고: HS Code 통칙 파일을 찾을 수 없습니다: {rules_file_path}")
+            return ""
+        except Exception as e:
+            print(f"경고: HS Code 통칙 파일 읽기 실패: {e}")
+            return ""
+    
     def _build_prompt(
         self,
         product_name: str,
@@ -786,7 +802,8 @@ class HSClassifier:
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 10자리여야 합니다.\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
                 
         # 컨텍스트 구성
@@ -863,6 +880,8 @@ class HSClassifier:
         """4자리 코드 예측용 프롬프트 구성"""
         system = (
             "당신은 국제무역 HS 코드 분류 전문가입니다.\n\n"
+            "HS Code 통칙: \n"
+            
             "규칙:\n"
             "1) 제공된 context 내의 정보만 사용하여 판단합니다.\n"
         )
@@ -881,7 +900,8 @@ class HSClassifier:
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 4자리여야 합니다 (예: 9405).\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -977,7 +997,8 @@ class HSClassifier:
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 6자리여야 합니다 (예: 9405.40).\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -1076,7 +1097,8 @@ class HSClassifier:
             "4) 추천하는 HS Code는 반드시 6자리여야 합니다 (예: 9405.40).\n"
             "5) **중요: 우선적으로 '6자리 HS Code 후보' 컨텍스트에 있는 코드를 추천하되, "
             "해당 컨텍스트에 적합한 코드가 없으면 전체 GraphDB Context에서 적절한 코드를 찾아 추천할 수 있습니다.**\n"
-            "6) 항상 응답은 strict JSON format으로만 출력합니다."
+            "6) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -1184,7 +1206,8 @@ class HSClassifier:
             "4) 추천하는 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).\n"
             "5) **중요: 우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 추천하되, "
             "해당 컨텍스트에 적합한 코드가 없으면 전체 GraphDB Context에서 적절한 코드를 찾아 추천할 수 있습니다.**\n"
-            "6) 항상 응답은 strict JSON format으로만 출력합니다."
+            "6) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
