@@ -788,7 +788,7 @@ class HSClassifier:
             "4) 추천하는 HS Code는 반드시 10자리여야 합니다.\n"
             "5) 항상 응답은 strict JSON format으로만 출력합니다."
         )
-        
+                
         # 컨텍스트 구성
         vector_context = ""
         if self.parser_type in ["chroma", "both"]:
@@ -1382,6 +1382,11 @@ class HSClassifier:
             )
         else:
             # 기존 동작: 개별 컨텍스트 사용
+            # vector_context 포맷팅 (ChromaDB 사용 시)
+            vector_context = ""
+            if self.parser_type in ["chroma", "both"]:
+                vector_context = self._format_chroma_context(chroma_hits)
+            
             sys_prompt, user_prompt = self._build_prompt(
                 product_name, product_description, chroma_hits, graph_context, top_n
             )
@@ -1407,6 +1412,10 @@ class HSClassifier:
         result, err = _parse_json_safely(output_text)
         if err:
             result = {"error": err, "raw_output": output_text}
+        
+        # context 정보 추가
+        result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
+        result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result
     
@@ -1592,6 +1601,28 @@ class HSClassifier:
         # 최종 결과에 1단계 정보도 포함
         result_10digit["step1_6digit_codes"] = six_digit_codes
         result_10digit["step1_result"] = result_6digit
+        
+        # context 정보 추가 (1단계: 6자리 예측용 context)
+        vector_context_step1 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step1 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step1"] = vector_context_step1 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context_step1"] = graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (2단계: 10자리 예측용 context)
+        vector_context_step2 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step2 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step2"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        # graph_context는 이미 문자열이고, ten_digit_context가 추가로 포함됨
+        final_graph_context = graph_context
+        if ten_digit_context and ten_digit_context != "(하위 10자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            final_graph_context = f"{graph_context}\n\n=== 예측된 6자리 코드의 하위 10자리 코드 ===\n{ten_digit_context}"
+        result_10digit["graphDB_context_step2"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # 하위 호환성을 위해 기존 필드명도 유지 (2단계 context)
+        result_10digit["chromaDB_context"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result_10digit
     
@@ -1874,6 +1905,38 @@ class HSClassifier:
         result_10digit["step1_result"] = result_4digit
         result_10digit["step2_6digit_codes"] = six_digit_codes
         result_10digit["step2_result"] = result_6digit
+        
+        # context 정보 추가 (1단계: 4자리 예측용 context)
+        vector_context_step1 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step1 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step1"] = vector_context_step1 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context_step1"] = graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (2단계: 6자리 예측용 context)
+        vector_context_step2 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step2 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step2"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        graph_context_step2 = graph_context
+        if six_digit_context and six_digit_context != "(하위 6자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            graph_context_step2 = f"{graph_context}\n\n=== 예측된 4자리 코드의 하위 6자리 코드 ===\n{six_digit_context}"
+        result_10digit["graphDB_context_step2"] = graph_context_step2 if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (3단계: 10자리 예측용 context)
+        vector_context_step3 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step3 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step3"] = vector_context_step3 if self.parser_type in ["chroma", "both"] else ""
+        # graph_context는 이미 문자열이고, ten_digit_context가 추가로 포함됨
+        final_graph_context = graph_context
+        if ten_digit_context and ten_digit_context != "(하위 10자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            final_graph_context = f"{graph_context}\n\n=== 예측된 6자리 코드의 하위 10자리 코드 ===\n{ten_digit_context}"
+        result_10digit["graphDB_context_step3"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # 하위 호환성을 위해 기존 필드명도 유지 (3단계 context)
+        result_10digit["chromaDB_context"] = vector_context_step3 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result_10digit
     

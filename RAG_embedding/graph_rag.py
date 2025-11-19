@@ -155,7 +155,9 @@ class GraphRAG:
                 code = doc.metadata.get("code")
                 if not code:
                     continue
-                if len(code) not in (4, 6):
+                # 점과 하이픈 제거 후 길이 확인 (4자리 또는 6자리만)
+                code_clean = str(code).replace('.', '').replace('-', '')
+                if len(code_clean) not in (4, 6):
                     continue
                 text = getattr(doc, "page_content", "")
                 if code not in seen:
@@ -327,6 +329,13 @@ class GraphRAG:
         candidates_str = str(candidate_codes).replace("'", '"')
 
         # LLM이 직접 쿼리를 생성하는 대신, 코드를 삽입하여 실행
+        # cypher_query = f"""
+        # UNWIND {candidates_str} AS root_code_str
+        # MATCH p = (root:HSItem {{code: root_code_str}})-[:HAS_CHILD*1..]->(n)
+        # WHERE NOT (n)-[:HAS_CHILD]->()
+        # RETURN nodes(p) AS Path_Nodes, relationships(p) AS Path_Relationships
+        # """
+
         cypher_query = f"""
         UNWIND {candidates_str} AS root_code_str
         MATCH p = (root:HSItem {{code: root_code_str}})-[:HAS_CHILD*1..]->(n)
@@ -387,21 +396,31 @@ class GraphRAG:
         Returns:
             str: 10자리 코드들의 컨텍스트 문자열
         """
-        # 6자리 코드를 정규화 (점 제거 또는 유지)
+        # 6자리 코드를 정규화 (점 있는 형식과 점 없는 형식 모두 시도)
+        # Neo4j에 저장된 형식이 일관되지 않을 수 있으므로 두 형식 모두 시도
         normalized_codes = []
         for code in six_digit_codes:
-            # 점이 있으면 그대로, 없으면 추가 (예: '9405.40' 또는 '940540')
             code_clean = code.replace('.', '').replace('-', '')
             if len(code_clean) == 6:
-                # 6자리 코드를 'XXXX.XX' 형식으로 변환
+                # 점 없는 형식 추가 (예: '842139')
+                normalized_codes.append(code_clean)
+                # 점 있는 형식도 추가 (예: '8421.39')
                 formatted = f"{code_clean[:4]}.{code_clean[4:6]}"
-                normalized_codes.append(formatted)
+                if formatted not in normalized_codes:
+                    normalized_codes.append(formatted)
             elif '.' in code:
+                # 이미 점이 있으면 그대로 추가
                 normalized_codes.append(code)
+                # 점 없는 형식도 추가
+                code_no_dot = code.replace('.', '').replace('-', '')
+                if code_no_dot not in normalized_codes:
+                    normalized_codes.append(code_no_dot)
         
         if not normalized_codes:
             return "# [10자리 HS Code 후보]\n\n(6자리 코드가 없습니다.)\n"
         
+        # 중복 제거
+        normalized_codes = list(set(normalized_codes))
         candidates_str = str(normalized_codes).replace("'", '"')
         
         # 6자리 코드의 직접 자식 중 10자리 코드만 가져오는 쿼리
@@ -427,7 +446,7 @@ class GraphRAG:
         parent_to_children = {}
         for result in results:
             parent = result.get('parent_code', '')
-            child_code = result.get('child_code', '')
+            child_code = str(result.get('child_code', ''))
             child_desc = result.get('child_description', '')
             
             # 점 제거 후 10자리인지 확인
