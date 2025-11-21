@@ -151,3 +151,6 @@ async def main(message: cl.Message):
     else:
         cl.user_session.set("step", "awaiting_name")
         await cl.Message(content="🔄 상태가 초기화되었습니다. 상품명을 입력해주세요.").send()
+
+# local에서 확인
+# chainlit run LLM/chainlit_app.py -w 
