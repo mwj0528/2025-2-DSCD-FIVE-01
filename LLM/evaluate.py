@@ -435,7 +435,8 @@ python LLM/evaluate.py --parser both --embed-model openai_small --output-path "o
 python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1117/eval_result.csv"
 
 # 2stage
-python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_1117/eval_result.csv"
+python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_no_hint_dataset/eval_result.csv"
+
 
 ### e5_small 임베딩 모델 사용 버전 ###
 # 둘 다 사용

@@ -1437,8 +1437,8 @@ class HSClassifier:
             result = {"error": err, "raw_output": output_text}
         
         # context 정보 추가
-        result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
-        result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
+        # result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
+        # result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result
     

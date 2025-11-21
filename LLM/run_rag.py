@@ -404,4 +404,10 @@ if __name__ == "__main__":
 
  python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "오실로스코프(oscilloscope)와 오실로그래프(oscillograph)" --desc "(전자계측기). 대분류: Instruments, apparatus for measuring, checking electrical quantities not meters of heading no. 9028; instruments, apparatus for measuring or detecting alpha, beta, gamma, x-ray, cosmic and other radiations. 중분류: Oscilloscopes and oscillographs."
 
+ 
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "LED lamp" --desc "This product is a finished LED lamp with a plastic housing and a built-in semiconductor LED light source. It is designed to provide illumination and includes internal driver electronics. The lamp is made mainly of plastic materials such as polycarbonate. It is sold as a complete product, not as a part or kit. Typical size ranges from approximately 50–100 mm in diameter and 50–150 mm in height."
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "인공눈물" --desc "눈에 넣는 윤활제로 안구 질환을 예방하고 통증을 완화하는 제품입니다."
+ 
  """
