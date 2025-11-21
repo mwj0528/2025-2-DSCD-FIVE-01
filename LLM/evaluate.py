@@ -27,9 +27,9 @@ def main():
     parser.add_argument(
         "--parser",
         type=str,
-        choices=["chroma", "graph", "both"],
+        choices=["chroma", "graph", "both", "both+nomenclature"],
         default="both",
-        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(둘 다, 기본값)"
+        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(ChromaDB+GraphDB), 'both+nomenclature'(ChromaDB+GraphDB+Nomenclature)"
     )
     parser.add_argument(
         "--no-keyword-extraction",
@@ -206,8 +206,13 @@ def main():
         os.remove(out_path)
     
     # ===== HSClassifier 초기화 =====
+    # parser 옵션 파싱: nomenclature 사용 여부 확인 (출력용)
+    use_nomenclature = "+nomenclature" in args.parser
+    parser_type = args.parser.replace("+nomenclature", "")
+    
     print(f"=== HS Code 분류 평가 시작 ===")
-    print(f"Parser 설정: {args.parser}")
+    print(f"Parser 설정: {parser_type}")
+    print(f"Nomenclature ChromaDB: {'사용' if use_nomenclature else '미사용'}")
     resolved_chroma_dir = EMBED_CHROMA_DIR.get(args.embed_model)
     print(f"키워드 추출: {'사용' if args.use_keyword_extraction else '미사용'}")
     print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
@@ -228,15 +233,15 @@ def main():
     unified_hybrid = args.hybrid_rrf
     unified_bm25_k = args.bm25_k
     unified_rrf_k = args.rrf_k
-
+    
     # 계층적 모드 검증
-    if (args.hierarchical or args.hierarchical_3stage) and args.parser not in ["graph", "both"]:
+    if (args.hierarchical or args.hierarchical_3stage) and parser_type not in ["graph", "both"]:
         print("오류: 계층적 모드는 GraphDB가 필요합니다. --parser를 'graph' 또는 'both'로 설정하세요.")
         return 1
     
     try:
         classifier = HSClassifier(
-            parser_type=args.parser,
+            parser_type=parser_type,
             chroma_dir=resolved_chroma_dir,
             embed_model=EMBED_MODEL_CHOICES[args.embed_model],
             use_keyword_extraction=args.use_keyword_extraction,
@@ -255,7 +260,8 @@ def main():
             llm_rerank_max_candidates=args.llm_listwise_max_cand,
             llm_rerank_top_m=args.llm_listwise_top_m,
             seed=seed,
-            translate_to_english=args.translate_to_english
+            translate_to_english=args.translate_to_english,
+            use_nomenclature=use_nomenclature
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -430,12 +436,6 @@ python LLM/evaluate.py --parser both --output-path "output/results/base_1117/eva
 python LLM/evaluate.py --parser both --embed-model openai_small --output-path "output/results/base_openai_small_1117/eval_result.csv"
 
 
-### openai_large 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1117/eval_result.csv"
-
-# 2stage
-python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_no_hint_dataset/eval_result.csv"
 
 
 ### e5_small 임베딩 모델 사용 버전 ###
@@ -526,4 +526,21 @@ python LLM/evaluate.py --parser both --hierarchical-3stage --embed-model openai_
 python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --data-path "data/only_case_100sample_1118.csv" --output-path "output/results/hierarchical_2stage_openai_large_casedataset_1118/eval_result_hierarchical_2stage.csv"
 
 
+
+
+### openai_large 임베딩 모델 사용 버전 ###
+# 둘 다 사용
+python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1121/eval_result.csv"
+
+# 2stage
+python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule/eval_result.csv"
+
+# 2stage + nomenclature
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_nomenclature/eval_result.csv"
+
+# 3stage
+python LLM/evaluate.py --parser both --hierarchical-3stage --embed-model openai_large --output-path "output/results/hierarchical_3stage_openai_large/eval_result.csv"
+
+# 3stage + nomenclature
+python LLM/evaluate.py --parser both+nomenclature --hierarchical-3stage --embed-model openai_large --output-path "output/results/hierarchical_3stage_openai_large_rule_nomenclature/eval_result.csv"
 """
