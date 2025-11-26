@@ -136,4 +136,4 @@ if __name__ == "__main__":
 # python RAG_embedding/nomenclature_chroma_embedding.py --markdown_file data/HS_code_Nomenclature.md --chroma_db_path data/chroma_db_nomenclature --model text-embedding-3-large
 
 # Salesforce/SFR-Embedding-Mistral 모델 사용 예시 (4092차원):
-# python RAG_embedding/nomenclature_chroma_embedding.py --markdown_file data/HS_code_Nomenclature.md --chroma_db_path data/chroma_db_nomenclature --model Salesforce/SFR-Embedding-Mistral
+# python RAG_embedding/nomenclature_chroma_embedding.py --markdown_file data/HS_code_Nomenclature.md --chroma_db_path data/chroma_db_nomenclature_mistral --model Salesforce/SFR-Embedding-Mistral
