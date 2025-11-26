@@ -19,8 +19,7 @@ EMBEDDING_DIM = 4092
 # --- 2. 임베딩 모델 정의 ---
 embedding_model = SentenceTransformerEmbeddings(
     model_name=MODEL_NAME,
-    encode_kwargs={"normalize_embeddings": True,
-                   "batch_size": 4,
+    encode_kwargs={"normalize_embeddings": True
                     }
 )
 # embedding_model = OpenAIEmbeddings(
