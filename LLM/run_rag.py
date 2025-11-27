@@ -7,6 +7,7 @@ HS Code 분류 RAG 실행 스크립트
 import json
 import argparse
 import os
+import time
 from rag_module import HSClassifier, ParserType, set_all_seeds
 
 EMBED_MODEL_CHOICES = {
@@ -45,9 +46,9 @@ def main():
     parser.add_argument(
         "--parser",
         type=str,
-        choices=["chroma", "graph", "both"],
+        choices=["chroma", "graph", "both", "both+nomenclature"],
         default="both",
-        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(둘 다)"
+        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(ChromaDB+GraphDB), 'both+nomenclature'(ChromaDB+GraphDB+Nomenclature)"
     )
     parser.add_argument(
         "--name",
@@ -214,10 +215,15 @@ def main():
     set_all_seeds(seed)
     print(f"랜덤 시드 고정: {seed}")
     
+    # parser 옵션 파싱: nomenclature 사용 여부 확인
+    use_nomenclature = "+nomenclature" in args.parser
+    parser_type = args.parser.replace("+nomenclature", "")
+    
     # HSClassifier 인스턴스 생성
     print(f"=== HS Code 분류 시스템 초기화 ===")
     resolved_chroma_dir = args.chroma_dir or EMBED_CHROMA_DIR.get(args.embed_model)
-    print(f"Parser 설정: {args.parser}")
+    print(f"Parser 설정: {parser_type}")
+    print(f"Nomenclature ChromaDB: {'사용' if use_nomenclature else '미사용'}")
     print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
     print(f"임베딩 모델: {args.embed_model}")
     if resolved_chroma_dir:
@@ -233,7 +239,7 @@ def main():
 
     try:
         classifier = HSClassifier(
-            parser_type=args.parser,
+            parser_type=parser_type,
             chroma_dir=resolved_chroma_dir or args.chroma_dir,
             collection_name=args.collection_name,
             embed_model=EMBED_MODEL_CHOICES[args.embed_model],
@@ -253,7 +259,8 @@ def main():
             llm_rerank_max_candidates=args.llm_listwise_max_cand,
             llm_rerank_top_m=args.llm_listwise_top_m,
             seed=seed,
-            translate_to_english=args.translate_to_english
+            translate_to_english=args.translate_to_english,
+            use_nomenclature=use_nomenclature
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -271,6 +278,7 @@ def main():
     print(f"Parser 타입: {contexts['parser_type']}")
     print(f"VectorDB 컨텍스트 길이: {len(contexts['vector_context'])}")
     print(f"GraphDB 컨텍스트 길이: {len(contexts['graph_context'])}")
+    print(f"Nomenclature 컨텍스트 길이: {len(contexts.get('nomenclature_context', ''))}")
     
     if contexts['parser_type'] in ["chroma", "both"]:
         print("\n--- VectorDB 컨텍스트 (ChromaDB) ---")
@@ -279,6 +287,11 @@ def main():
     if contexts['parser_type'] in ["graph", "both"]:
         print("\n--- GraphDB 컨텍스트 ---")
         print(contexts['graph_context'])
+    
+    # Nomenclature 컨텍스트 출력 (항상 출력)
+    if 'nomenclature_context' in contexts:
+        print("\n--- Nomenclature 컨텍스트 (HS 공식 명명법 문서) ---")
+        print(contexts['nomenclature_context'])
     
     # HS Code 분류 실행
     print("\n=== HS Code 분류 실행 ===")
@@ -289,9 +302,12 @@ def main():
     print("처리 중...")
     
     try:
+        # 추론 시작 시간 측정
+        start_time = time.perf_counter()
+        
         if args.hierarchical_3stage:
             # 계층적 3단계 RAG 사용
-            if args.parser not in ["graph", "both"]:
+            if parser_type not in ["graph", "both"]:
                 print("오류: 계층적 모드는 GraphDB가 필요합니다. --parser를 'graph' 또는 'both'로 설정하세요.")
                 return 1
             
@@ -304,7 +320,7 @@ def main():
             )
         elif args.hierarchical:
             # 계층적 2단계 RAG 사용
-            if args.parser not in ["graph", "both"]:
+            if parser_type not in ["graph", "both"]:
                 print("오류: 계층적 모드는 GraphDB가 필요합니다. --parser를 'graph' 또는 'both'로 설정하세요.")
                 return 1
             
@@ -325,8 +341,18 @@ def main():
                 graph_k=args.graph_k
             )
         
+        # 추론 종료 시간 측정
+        end_time = time.perf_counter()
+        inference_time = end_time - start_time
+        
         print("\n=== 분류 결과 ===")
+        print(f"추론 시간: {inference_time:.2f}초 ({inference_time:.3f}초)")
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        
+        # 결과에 시간 정보 추가
+        if isinstance(result, dict):
+            result["inference_time_seconds"] = round(inference_time, 3)
+        
         return 0
         
     except Exception as e:
@@ -386,6 +412,8 @@ if __name__ == "__main__":
   # 계층적 3단계 모드 (GraphDB 또는 both 필요)
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical-3stage
 
+  ### embed model openai_large 버전 ###
+  python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical --embed-model openai_large
 
   ### ReRank 적용 버전 ###
 
@@ -399,4 +427,14 @@ if __name__ == "__main__":
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --rerank --graph-rerank
 
   python LLM/run_rag.py --parser both --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --hierarchical --top-n 5
-"""
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "오실로스코프(oscilloscope)와 오실로그래프(oscillograph)" --desc "(전자계측기). 대분류: Instruments, apparatus for measuring, checking electrical quantities not meters of heading no. 9028; instruments, apparatus for measuring or detecting alpha, beta, gamma, x-ray, cosmic and other radiations. 중분류: Oscilloscopes and oscillographs."
+
+ 
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "LED lamp" --desc "This product is a finished LED lamp with a plastic housing and a built-in semiconductor LED light source. It is designed to provide illumination and includes internal driver electronics. The lamp is made mainly of plastic materials such as polycarbonate. It is sold as a complete product, not as a part or kit. Typical size ranges from approximately 50–100 mm in diameter and 50–150 mm in height."
+
+ python LLM/run_rag.py --parser both --hierarchical-3stage --embed-model openai_large --name "인공눈물" --desc "눈에 넣는 윤활제로 안구 질환을 예방하고 통증을 완화하는 제품입니다."
+ 
+ 
+ """

@@ -111,6 +111,8 @@ load_dotenv()
 # 기본 설정
 DEFAULT_CHROMA_DIR = os.getenv("CHROMA_DIR", "data/chroma_db")
 DEFAULT_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
+DEFAULT_NOMENCLATURE_DIR = os.getenv("NOMENCLATURE_DIR", "data/nomenclature_chroma_db")
+DEFAULT_NOMENCLATURE_COLLECTION = os.getenv("NOMENCLATURE_COLLECTION", "hscode_nomenclature")
 DEFAULT_EMBED_MODEL = os.getenv("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
@@ -334,6 +336,8 @@ class HSClassifier:
         parser_type: ParserType = "both",
         chroma_dir: str = None,
         collection_name: str = None,
+        nomenclature_dir: str = None,
+        nomenclature_collection_name: str = None,
         embed_model: str = None,
         openai_model: str = None,
         openai_api_key: str = None,
@@ -356,18 +360,22 @@ class HSClassifier:
         rrf_k: int = 60,
         temperature: float = 0.0,
         seed: Optional[int] = None,
-        translate_to_english: bool = False
+        translate_to_english: bool = False,
+        use_nomenclature: bool = True
     ):
         """
         Args:
             parser_type: 사용할 DB 설정 ("chroma", "graph", "both")
-            chroma_dir: ChromaDB 디렉토리 경로
-            collection_name: ChromaDB 컬렉션 이름
+            chroma_dir: ChromaDB 디렉토리 경로 (case data용)
+            collection_name: ChromaDB 컬렉션 이름 (case data용)
+            nomenclature_dir: Nomenclature ChromaDB 디렉토리 경로
+            nomenclature_collection_name: Nomenclature ChromaDB 컬렉션 이름
             embed_model: 임베딩 모델 이름
             openai_model: OpenAI 모델 이름
             openai_api_key: OpenAI API 키
             use_keyword_extraction: ChromaDB 검색 시 키워드 추출 사용 여부 (기본값: True)
             translate_to_english: 사용자 입력을 영어로 번역하여 RAG 검색 수행 (기본값: False)
+            use_nomenclature: Nomenclature ChromaDB 사용 여부 (기본값: True)
         """
         # Parser 타입 설정
         if parser_type not in ["chroma", "graph", "both"]:
@@ -386,6 +394,8 @@ class HSClassifier:
         # 설정값 초기화
         self.chroma_dir = chroma_dir or DEFAULT_CHROMA_DIR
         self.collection_name = collection_name or DEFAULT_COLLECTION_NAME
+        self.nomenclature_dir = nomenclature_dir or DEFAULT_NOMENCLATURE_DIR
+        self.nomenclature_collection_name = nomenclature_collection_name or DEFAULT_NOMENCLATURE_COLLECTION
         self.embed_model = embed_model or DEFAULT_EMBED_MODEL
         self.openai_model = openai_model or DEFAULT_OPENAI_MODEL
         self.rerank_model = rerank_model or DEFAULT_RERANK_MODEL
@@ -422,6 +432,9 @@ class HSClassifier:
         # 번역 옵션 설정
         self.translate_to_english = bool(translate_to_english)
         
+        # Nomenclature 사용 여부 설정
+        self.use_nomenclature = bool(use_nomenclature)
+        
         # OpenAI 클라이언트 초기화
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -431,6 +444,7 @@ class HSClassifier:
         # ChromaDB 관련 초기화 (필요한 경우)
         self._chroma_embedder = None
         self._chroma_collection = None
+        self._nomenclature_collection = None
         self._reranker = None
         if parser_type in ["chroma", "both"]:
             try:
@@ -448,6 +462,19 @@ class HSClassifier:
                 except Exception as e:
                     print(f"경고: ReRank 모델 초기화 실패: {e}")
                     self._reranker = None
+        
+        # Nomenclature ChromaDB 초기화 (use_nomenclature 파라미터로 제어)
+        self._nomenclature_collection = None
+        if self.use_nomenclature:
+            try:
+                # nomenclature는 별도의 embedder가 필요할 수 있지만, 같은 모델 사용
+                if self._chroma_embedder is None:
+                    self._chroma_embedder = QueryEmbedder(self.embed_model)
+                self._nomenclature_collection = open_chroma_collection(self.nomenclature_dir, self.nomenclature_collection_name)
+                print(f"Nomenclature ChromaDB 초기화 완료: {self.nomenclature_dir}/{self.nomenclature_collection_name}")
+            except Exception as e:
+                print(f"경고: Nomenclature ChromaDB 초기화 실패 (계속 진행): {e}")
+                self._nomenclature_collection = None
         
         # GraphDB 관련 초기화 (필요한 경우)
         self._graph_rag = None
@@ -467,9 +494,12 @@ class HSClassifier:
                 print(f"경고: GraphDB 초기화 실패: {e}")
                 if parser_type == "graph":
                     raise
-    
+        
+        # HS Code 통칙 로드 및 캐싱
+        self.hscode_rules = self._load_hscode_rules()
+        # self.hscode_rules = ""
     def _get_chroma_context(self, query_text: str, top_k: int = 8) -> List[Dict[str, Any]]:
-        """ChromaDB에서 컨텍스트 검색"""
+        """ChromaDB에서 컨텍스트 검색 (case data용)"""
         if self._chroma_collection is None or self._chroma_embedder is None:
             return []
         
@@ -503,6 +533,20 @@ class HSClassifier:
                 step=self.llm_rerank_step,
                 top_m=min(self.llm_rerank_top_m, len(hits))
             )
+        return hits
+    
+    def _get_nomenclature_context(self, query_text: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Nomenclature ChromaDB에서 컨텍스트 검색"""
+        if self._nomenclature_collection is None or self._chroma_embedder is None:
+            return []
+        
+        # 키워드 추출 사용 여부에 따라 쿼리 텍스트 결정
+        if self.use_keyword_extraction:
+            query_for_search = extract_keywords_advanced(query_text)
+        else:
+            query_for_search = query_text
+        
+        hits = search_chroma(self._nomenclature_collection, self._chroma_embedder, query_for_search, top_k=top_k)
         return hits
 
     # ===== BM25 / RRF Hybrid 구현 =====
@@ -719,7 +763,7 @@ class HSClassifier:
             return ""
     
     def _format_chroma_context(self, hits: List[Dict[str, Any]], max_docs: int = 10) -> str:
-        """ChromaDB 검색 결과를 컨텍스트 문자열로 포맷팅"""
+        """ChromaDB 검색 결과를 컨텍스트 문자열로 포맷팅 (case data용)"""
         def _pick(meta, keys, default=""):
             for k in keys:
                 v = meta.get(k)
@@ -757,12 +801,48 @@ class HSClassifier:
 
         return "\n\n".join(blocks) if blocks else "(검색 결과 없음)"
     
+    def _format_nomenclature_context(self, hits: List[Dict[str, Any]], max_docs: int = 5) -> str:
+        """Nomenclature ChromaDB 검색 결과를 컨텍스트 문자열로 포맷팅"""
+        blocks = []
+        for d in hits[:max_docs]:
+            body = (d.get("document") or "").strip()
+            
+            max_chars = 1500
+            if len(body) > max_chars:
+                body = body[:max_chars] + "…"
+            
+            dist = d.get("distance", 0.0)
+            try:
+                dist = float(dist)
+            except Exception:
+                dist = 0.0
+            
+            blocks.append(
+                f"[NOMENCLATURE id={d.get('id')} dist={dist:.4f}]\n{body}\n"
+            )
+        
+        return "\n\n".join(blocks) if blocks else "(Nomenclature 검색 결과 없음)"
+    
+    def _load_hscode_rules(self) -> str:
+        """HS Code 통칙 파일을 읽어서 반환"""
+        rules_file_path = os.path.join(current_dir, 'hscode_rule.txt')
+        try:
+            with open(rules_file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            print(f"경고: HS Code 통칙 파일을 찾을 수 없습니다: {rules_file_path}")
+            return ""
+        except Exception as e:
+            print(f"경고: HS Code 통칙 파일 읽기 실패: {e}")
+            return ""
+    
     def _build_prompt(
         self,
         product_name: str,
         product_description: str,
         chroma_hits: List[Dict[str, Any]],
         graph_context: str,
+        nomenclature_context: str,
         top_n: int
     ) -> Tuple[str, str]:
         """프롬프트 구성"""
@@ -786,9 +866,10 @@ class HSClassifier:
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 10자리여야 합니다.\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
-        
+                
         # 컨텍스트 구성
         vector_context = ""
         if self.parser_type in ["chroma", "both"]:
@@ -858,11 +939,14 @@ class HSClassifier:
         product_description: str,
         chroma_hits: List[Dict[str, Any]],
         graph_context: str,
+        nomenclature_context: str,
         top_n: int
     ) -> Tuple[str, str]:
         """4자리 코드 예측용 프롬프트 구성"""
         system = (
             "당신은 국제무역 HS 코드 분류 전문가입니다.\n\n"
+            "HS Code 통칙: \n"
+            
             "규칙:\n"
             "1) 제공된 context 내의 정보만 사용하여 판단합니다.\n"
         )
@@ -871,17 +955,25 @@ class HSClassifier:
         if self.parser_type == "both":
             system += (
                 "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
-                "   품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+                "   품목분류사례(VectorDB Context)는 classify Case data이고\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
             )
         elif self.parser_type == "graph":
-            system += "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data입니다.\n"
+            system += (
+                "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         elif self.parser_type == "chroma":
-            system += "2) 품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+            system += (
+                "2) 품목분류사례(VectorDB Context)는 classify Case data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 4자리여야 합니다 (예: 9405).\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -954,6 +1046,7 @@ class HSClassifier:
         product_description: str,
         chroma_hits: List[Dict[str, Any]],
         graph_context: str,
+        nomenclature_context: str,
         top_n: int
     ) -> Tuple[str, str]:
         """6자리 코드 예측용 프롬프트 구성"""
@@ -967,17 +1060,25 @@ class HSClassifier:
         if self.parser_type == "both":
             system += (
                 "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
-                "   품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+                "   품목분류사례(VectorDB Context)는 classify Case data이고\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
             )
         elif self.parser_type == "graph":
-            system += "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data입니다.\n"
+            system += (
+                "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         elif self.parser_type == "chroma":
-            system += "2) 품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+            system += (
+                "2) 품목분류사례(VectorDB Context)는 classify Case data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 6자리여야 합니다 (예: 9405.40).\n"
-            "5) 항상 응답은 strict JSON format으로만 출력합니다."
+            "5) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -1019,6 +1120,15 @@ class HSClassifier:
 ================================================
 """
         
+        # Nomenclature 컨텍스트 추가 (항상 추가)
+        if nomenclature_context and nomenclature_context != "(Nomenclature 검색 결과 없음)":
+            user += f"""
+[Nomenclature Context — HS 공식 명명법 문서]
+(HS Code 공식 Nomenclature 문서 기반)
+{nomenclature_context}
+================================================
+"""
+        
         user += f"""
 [응답 형식: strict JSON — 추가 키 금지]
 {{
@@ -1051,6 +1161,7 @@ class HSClassifier:
         chroma_hits: List[Dict[str, Any]],
         graph_context: str,
         six_digit_context: str,
+        nomenclature_context: str,
         top_n: int
     ) -> Tuple[str, str]:
         """4자리에서 예측된 6자리 코드 예측용 프롬프트 구성 (2단계)"""
@@ -1064,19 +1175,27 @@ class HSClassifier:
         if self.parser_type == "both":
             system += (
                 "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
-                "   품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+                "   품목분류사례(VectorDB Context)는 classify Case data이고\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
             )
         elif self.parser_type == "graph":
-            system += "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data입니다.\n"
+            system += (
+                "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         elif self.parser_type == "chroma":
-            system += "2) 품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+            system += (
+                "2) 품목분류사례(VectorDB Context)는 classify Case data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 6자리여야 합니다 (예: 9405.40).\n"
             "5) **중요: 우선적으로 '6자리 HS Code 후보' 컨텍스트에 있는 코드를 추천하되, "
             "해당 컨텍스트에 적합한 코드가 없으면 전체 GraphDB Context에서 적절한 코드를 찾아 추천할 수 있습니다.**\n"
-            "6) 항상 응답은 strict JSON format으로만 출력합니다."
+            "6) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -1116,6 +1235,15 @@ class HSClassifier:
 [품목분류사례 Context — VectorDB Retrieved]
 (정부 품목분류사례 문서 기반 근거 자료)
 {vector_context}  
+================================================
+"""
+        
+        # Nomenclature 컨텍스트 추가 (항상 추가)
+        if nomenclature_context and nomenclature_context != "(Nomenclature 검색 결과 없음)":
+            user += f"""
+[Nomenclature Context — HS 공식 명명법 문서]
+(HS Code 공식 Nomenclature 문서 기반)
+{nomenclature_context}
 ================================================
 """
         
@@ -1159,6 +1287,7 @@ class HSClassifier:
         chroma_hits: List[Dict[str, Any]],
         graph_context: str,
         ten_digit_context: str,
+        nomenclature_context: str,
         top_n: int
     ) -> Tuple[str, str]:
         """10자리 코드 예측용 계층적 프롬프트 구성 (2단계)"""
@@ -1172,19 +1301,27 @@ class HSClassifier:
         if self.parser_type == "both":
             system += (
                 "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
-                "   품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+                "   품목분류사례(VectorDB Context)는 classify Case data이고\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
             )
         elif self.parser_type == "graph":
-            system += "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data입니다.\n"
+            system += (
+                "2) HS Code 계층 구조(GraphDB Context)는 전체 HS Code data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         elif self.parser_type == "chroma":
-            system += "2) 품목분류사례(VectorDB Context)는 classify Case data입니다.\n"
+            system += (
+                "2) 품목분류사례(VectorDB Context)는 classify Case data이며\n"
+                "   Nomenclature Context는 HS 공식 명명법 문서입니다.\n"
+            )
         
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
             "4) 추천하는 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).\n"
             "5) **중요: 우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 추천하되, "
             "해당 컨텍스트에 적합한 코드가 없으면 전체 GraphDB Context에서 적절한 코드를 찾아 추천할 수 있습니다.**\n"
-            "6) 항상 응답은 strict JSON format으로만 출력합니다."
+            "6) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
+            f"HS Code 분류 통칙:\n{self.hscode_rules}\n"
         )
         
         # 컨텍스트 구성
@@ -1224,6 +1361,15 @@ class HSClassifier:
 [품목분류사례 Context — VectorDB Retrieved]
 (정부 품목분류사례 문서 기반 근거 자료)
 {vector_context}  
+================================================
+"""
+        
+        # Nomenclature 컨텍스트 추가 (항상 추가)
+        if nomenclature_context and nomenclature_context != "(Nomenclature 검색 결과 없음)":
+            user += f"""
+[Nomenclature Context — HS 공식 명명법 문서]
+(HS Code 공식 Nomenclature 문서 기반)
+{nomenclature_context}
 ================================================
 """
         
@@ -1302,6 +1448,10 @@ class HSClassifier:
                 chroma_top_k = max(8, top_n * 3)
             chroma_hits = self._get_chroma_context(original_query_text, top_k=chroma_top_k)
 
+        # Nomenclature ChromaDB 검색 (항상 시도)
+        nomenclature_hits = self._get_nomenclature_context(search_query_text, top_k=5)
+        nomenclature_context = self._format_nomenclature_context(nomenclature_hits, max_docs=5)
+
         # GraphDB: 기본은 context 문자열, late-fusion 재랭크 시에는 후보 텍스트 포함 리스트 사용
         graph_context = ""
         graph_candidates_with_text = []
@@ -1378,12 +1528,17 @@ class HSClassifier:
 
             # 프롬프트 구성
             sys_prompt, user_prompt = self._build_prompt(
-                product_name, product_description, chroma_ctx_hits, graph_context, top_n
+                product_name, product_description, chroma_ctx_hits, graph_context, nomenclature_context, top_n
             )
         else:
             # 기존 동작: 개별 컨텍스트 사용
+            # vector_context 포맷팅 (ChromaDB 사용 시)
+            vector_context = ""
+            if self.parser_type in ["chroma", "both"]:
+                vector_context = self._format_chroma_context(chroma_hits)
+            
             sys_prompt, user_prompt = self._build_prompt(
-                product_name, product_description, chroma_hits, graph_context, top_n
+                product_name, product_description, chroma_hits, graph_context, nomenclature_context, top_n
             )
         
         # LLM 호출
@@ -1407,6 +1562,10 @@ class HSClassifier:
         result, err = _parse_json_safely(output_text)
         if err:
             result = {"error": err, "raw_output": output_text}
+        
+        # context 정보 추가
+        # result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
+        # result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result
     
@@ -1462,13 +1621,17 @@ class HSClassifier:
         if self.parser_type in ["graph", "both"]:
             graph_context = self._get_graph_context(search_query_text, k=graph_k)
         
+        # Nomenclature ChromaDB 검색 (항상 시도)
+        nomenclature_hits = self._get_nomenclature_context(search_query_text, top_k=5)
+        nomenclature_context = self._format_nomenclature_context(nomenclature_hits, max_docs=5)
+        
         # 1단계: 6자리 코드 예측 - LLM이 n개 미만을 반환하는 경우를 대비해 더 많은 후보 요청
         # 중복이 있을 수 있으므로 top_n * 2를 요청하고, 중복 제거 후 정확히 top_n개 선택
         request_count = max(top_n * 2, top_n + 5)  # 최소 top_n + 5개 요청
         
         # 1단계: 6자리 코드 예측 프롬프트 구성
         sys_prompt_6digit, user_prompt_6digit = self._build_prompt_6digit(
-            product_name, product_description, chroma_hits, graph_context, request_count
+            product_name, product_description, chroma_hits, graph_context, nomenclature_context, request_count
         )
         
         # 1단계 LLM 호출
@@ -1561,7 +1724,7 @@ class HSClassifier:
         
         # 2단계: 10자리 코드 예측 프롬프트 구성
         sys_prompt_10digit, user_prompt_10digit = self._build_prompt_10digit_hierarchical(
-            product_name, product_description, chroma_hits, graph_context, ten_digit_context, top_n
+            product_name, product_description, chroma_hits, graph_context, ten_digit_context, nomenclature_context, top_n
         )
         
         # 2단계 LLM 호출
@@ -1592,6 +1755,28 @@ class HSClassifier:
         # 최종 결과에 1단계 정보도 포함
         result_10digit["step1_6digit_codes"] = six_digit_codes
         result_10digit["step1_result"] = result_6digit
+        
+        # context 정보 추가 (1단계: 6자리 예측용 context)
+        vector_context_step1 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step1 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step1"] = vector_context_step1 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context_step1"] = graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (2단계: 10자리 예측용 context)
+        vector_context_step2 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step2 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step2"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        # graph_context는 이미 문자열이고, ten_digit_context가 추가로 포함됨
+        final_graph_context = graph_context
+        if ten_digit_context and ten_digit_context != "(하위 10자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            final_graph_context = f"{graph_context}\n\n=== 예측된 6자리 코드의 하위 10자리 코드 ===\n{ten_digit_context}"
+        result_10digit["graphDB_context_step2"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # 하위 호환성을 위해 기존 필드명도 유지 (2단계 context)
+        result_10digit["chromaDB_context"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
         
         return result_10digit
     
@@ -1648,12 +1833,16 @@ class HSClassifier:
         if self.parser_type in ["graph", "both"]:
             graph_context = self._get_graph_context(search_query_text, k=graph_k)
         
+        # Nomenclature ChromaDB 검색 (항상 시도)
+        nomenclature_hits = self._get_nomenclature_context(search_query_text, top_k=5)
+        nomenclature_context = self._format_nomenclature_context(nomenclature_hits, max_docs=5)
+        
         # 1단계: 4자리 코드 예측 - LLM이 n개 미만을 반환하는 경우를 대비해 더 많은 후보 요청
         request_count = max(top_n * 2, top_n + 5)  # 최소 top_n + 5개 요청
         
         # 1단계: 4자리 코드 예측 프롬프트 구성
         sys_prompt_4digit, user_prompt_4digit = self._build_prompt_4digit(
-            product_name, product_description, chroma_hits, graph_context, request_count
+            product_name, product_description, chroma_hits, graph_context, nomenclature_context, request_count
         )
         
         # 1단계 LLM 호출
@@ -1743,7 +1932,7 @@ class HSClassifier:
         
         # 2단계: 6자리 코드 예측 프롬프트 구성
         sys_prompt_6digit, user_prompt_6digit = self._build_prompt_6digit_from_4digit(
-            product_name, product_description, chroma_hits, graph_context, six_digit_context, request_count
+            product_name, product_description, chroma_hits, graph_context, six_digit_context, nomenclature_context, request_count
         )
         
         # 2단계 LLM 호출
@@ -1840,7 +2029,7 @@ class HSClassifier:
         
         # 3단계: 10자리 코드 예측 프롬프트 구성
         sys_prompt_10digit, user_prompt_10digit = self._build_prompt_10digit_hierarchical(
-            product_name, product_description, chroma_hits, graph_context, ten_digit_context, top_n
+            product_name, product_description, chroma_hits, graph_context, ten_digit_context, nomenclature_context, top_n
         )
         
         # 3단계 LLM 호출
@@ -1875,6 +2064,38 @@ class HSClassifier:
         result_10digit["step2_6digit_codes"] = six_digit_codes
         result_10digit["step2_result"] = result_6digit
         
+        # context 정보 추가 (1단계: 4자리 예측용 context)
+        vector_context_step1 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step1 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step1"] = vector_context_step1 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context_step1"] = graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (2단계: 6자리 예측용 context)
+        vector_context_step2 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step2 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step2"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
+        graph_context_step2 = graph_context
+        if six_digit_context and six_digit_context != "(하위 6자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            graph_context_step2 = f"{graph_context}\n\n=== 예측된 4자리 코드의 하위 6자리 코드 ===\n{six_digit_context}"
+        result_10digit["graphDB_context_step2"] = graph_context_step2 if self.parser_type in ["graph", "both"] else ""
+        
+        # context 정보 추가 (3단계: 10자리 예측용 context)
+        vector_context_step3 = ""
+        if self.parser_type in ["chroma", "both"]:
+            vector_context_step3 = self._format_chroma_context(chroma_hits)
+        result_10digit["chromaDB_context_step3"] = vector_context_step3 if self.parser_type in ["chroma", "both"] else ""
+        # graph_context는 이미 문자열이고, ten_digit_context가 추가로 포함됨
+        final_graph_context = graph_context
+        if ten_digit_context and ten_digit_context != "(하위 10자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)":
+            final_graph_context = f"{graph_context}\n\n=== 예측된 6자리 코드의 하위 10자리 코드 ===\n{ten_digit_context}"
+        result_10digit["graphDB_context_step3"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        
+        # 하위 호환성을 위해 기존 필드명도 유지 (3단계 context)
+        result_10digit["chromaDB_context"] = vector_context_step3 if self.parser_type in ["chroma", "both"] else ""
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        
         return result_10digit
     
     def get_enhanced_context(
@@ -1885,7 +2106,7 @@ class HSClassifier:
         graph_k: int = 5
     ) -> Dict[str, str]:
         """
-        ChromaDB와 GraphDB의 컨텍스트를 모두 가져오는 헬퍼 함수
+        ChromaDB, GraphDB, Nomenclature ChromaDB의 컨텍스트를 모두 가져오는 헬퍼 함수
         
         Args:
             product_name: 상품명
@@ -1894,7 +2115,7 @@ class HSClassifier:
             graph_k: GraphDB에서 검색할 후보 개수
             
         Returns:
-            Dict[str, str]: vector_context, graph_context, query_text를 포함한 딕셔너리
+            Dict[str, str]: vector_context, graph_context, nomenclature_context, query_text를 포함한 딕셔너리
         """
         original_query_text = f"{product_name}\n{product_description}"
         
@@ -1913,9 +2134,18 @@ class HSClassifier:
         else:
             graph_context = "(GraphDB 미사용)"
         
+        # Nomenclature ChromaDB 컨텍스트 (항상 시도)
+        nomenclature_context = ""
+        if self._nomenclature_collection is not None:
+            nomenclature_hits = self._get_nomenclature_context(original_query_text, top_k=5)
+            nomenclature_context = self._format_nomenclature_context(nomenclature_hits, max_docs=5)
+        else:
+            nomenclature_context = "(Nomenclature ChromaDB 미사용)"
+        
         return {
             "vector_context": chroma_context,
             "graph_context": graph_context,
+            "nomenclature_context": nomenclature_context,
             "query_text": original_query_text,
             "parser_type": self.parser_type
         }

@@ -27,9 +27,9 @@ def main():
     parser.add_argument(
         "--parser",
         type=str,
-        choices=["chroma", "graph", "both"],
+        choices=["chroma", "graph", "both", "both+nomenclature"],
         default="both",
-        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(둘 다, 기본값)"
+        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(ChromaDB+GraphDB), 'both+nomenclature'(ChromaDB+GraphDB+Nomenclature)"
     )
     parser.add_argument(
         "--no-keyword-extraction",
@@ -206,8 +206,13 @@ def main():
         os.remove(out_path)
     
     # ===== HSClassifier 초기화 =====
+    # parser 옵션 파싱: nomenclature 사용 여부 확인 (출력용)
+    use_nomenclature = "+nomenclature" in args.parser
+    parser_type = args.parser.replace("+nomenclature", "")
+    
     print(f"=== HS Code 분류 평가 시작 ===")
-    print(f"Parser 설정: {args.parser}")
+    print(f"Parser 설정: {parser_type}")
+    print(f"Nomenclature ChromaDB: {'사용' if use_nomenclature else '미사용'}")
     resolved_chroma_dir = EMBED_CHROMA_DIR.get(args.embed_model)
     print(f"키워드 추출: {'사용' if args.use_keyword_extraction else '미사용'}")
     print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
@@ -228,15 +233,15 @@ def main():
     unified_hybrid = args.hybrid_rrf
     unified_bm25_k = args.bm25_k
     unified_rrf_k = args.rrf_k
-
+    
     # 계층적 모드 검증
-    if (args.hierarchical or args.hierarchical_3stage) and args.parser not in ["graph", "both"]:
+    if (args.hierarchical or args.hierarchical_3stage) and parser_type not in ["graph", "both"]:
         print("오류: 계층적 모드는 GraphDB가 필요합니다. --parser를 'graph' 또는 'both'로 설정하세요.")
         return 1
     
     try:
         classifier = HSClassifier(
-            parser_type=args.parser,
+            parser_type=parser_type,
             chroma_dir=resolved_chroma_dir,
             embed_model=EMBED_MODEL_CHOICES[args.embed_model],
             use_keyword_extraction=args.use_keyword_extraction,
@@ -255,7 +260,8 @@ def main():
             llm_rerank_max_candidates=args.llm_listwise_max_cand,
             llm_rerank_top_m=args.llm_listwise_top_m,
             seed=seed,
-            translate_to_english=args.translate_to_english
+            translate_to_english=args.translate_to_english,
+            use_nomenclature=use_nomenclature
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -412,111 +418,22 @@ if __name__ == "__main__":
     exit(main())
 
 """
+### openai_large 임베딩 모델 사용 버전(--embed-model openai_large) ###
 
-### Input 키워드 추출하는 버전 ###
+# 1stage model(--output-path 결과저장경로)
 
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --output-path "output/results/ChromaDB_keyword+input_keyword_1031/eval_result.csv"
+python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large/eval_result.csv"
 
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --output-path "output/results/graphDB+input_keyword_1031/eval_result.csv"
+# 2stage(--hierarchical --output-path 결과저장경로)
 
-# 둘 다 사용
-python LLM/evaluate.py --parser both --output-path "output/results/base_1117/eval_result.csv"
+python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule/eval_result.csv"
 
+# 2stage + nomenclature(--parser both+nomenclature --hierarchical --output-path 결과저장경로)
 
-### openai_small 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model openai_small --output-path "output/results/base_openai_small_1117/eval_result.csv"
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_nomenclature/eval_result.csv"
 
 
-### openai_large 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large_1117/eval_result.csv"
+# 2stage + nomenclature + 새로운 dataset(--parser both+nomenclature --hierarchical --data-path 새로운dataset경로 --output-path 결과저장경로)
 
-# 2stage
-python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_1117/eval_result.csv"
-
-### e5_small 임베딩 모델 사용 버전 ###
-# 둘 다 사용
-python LLM/evaluate.py --parser both --embed-model intfloat/multilingual-e5-small --output-path "output/results/base_e5_small_1117/eval_result.csv"
-
-
-### 영어 번역 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --translate-to-english --output-path "output/results/ChromaDB_translate_1117/eval_result.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --translate-to-english --output-path "output/results/graphDB_translate_1117/eval_result.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --translate-to-english --output-path "output/results/base_translate_1117/eval_result.csv"
-
-
-### Input 키워드 추출 사용 안 하는 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --no-keyword-extraction --output-path "output/results/no_keyword_input_chroma_1031/eval_result.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --no-keyword-extraction --output-path "output/results/no_keyword_input_graph_1031/eval_result.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --no-keyword-extraction --output-path "output/results/no_keyword_input_both_1031/eval_result.csv"
-
-### ReRank 적용 버전 ###
-
-# 둘 다 ReRank 적용
-python LLM/evaluate.py --parser both --rerank --chroma-top-k 5 --rerank-top-m 5 --graph-k 5 --graph-rerank-top-m 5 --output-path "output/results/base+rerank_1104/eval_result_rerank.csv"
-
-### hybrid search 적용 버전 ###
-
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --hybrid-rrf --output-path "output/results/base+chroma_hybrid_1031/eval_result_hybrid.csv"
-
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --hybrid-rrf --output-path "output/results/base+graph_hybrid_1031/eval_result_hybrid.csv"
-
-# 둘 다 사용
-python LLM/evaluate.py --parser both --hybrid-rrf --output-path "output/results/base+hybrid_1117/eval_result_hybrid.csv"
-
-
-### Rerank + Hybrid Search 적용 버전 ###
-python LLM/evaluate.py --parser both --rerank --graph-rerank \
-    --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 \
-    --hybrid-rrf --output-path "output/results/base+rerank_hybrid_1031/eval_result_rerank_hybrid.csv"
-
-# LLM ReRank + Hybrid Search 적용 버전
-python LLM/evaluate.py --parser both --hybrid-rrf --bm25-k 5 --rrf-k 60 --llm-listwise --llm-listwise-max-cand 16 --llm-listwise-window 10 --llm-listwise-step 5 --llm-listwise-top-m 5 --chroma-top-k 10 --graph-k 8 --output-path "output/results/llm_rerank_hybrid_1031/eval_result_llm_rerank_hybrid.csv"
-
-### 계층적 2단계 RAG 버전 ###
-
-# 계층적 모드 (GraphDB 또는 both 필요)
-python LLM/evaluate.py --parser both --hierarchical --output-path "output/results/hierarchical_2stage/eval_result_hierarchical.csv"
-
-# 계층적 모드 + ReRank
-python LLM/evaluate.py --parser both --hierarchical --rerank --graph-rerank --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 --output-path "output/results/hierarchical_2stage+rerank/eval_result_hierarchical_rerank.csv"
-
-# 계층적 모드 + 영어
-python LLM/evaluate.py --parser both --hierarchical --translate-to-english --output-path "output/results/hierarchical_2stage+translate/eval_result_hierarchical_translate.csv"
-
-# 계층적 모드 + Hybrid Search
-python LLM/evaluate.py --parser both --hierarchical --hybrid-rrf --output-path "output/results/hierarchical_2stage+hybrid/eval_result_hierarchical_hybrid.csv"
-
-# 계층적 모드 + Hybrid Search + 영어 번역
-python LLM/evaluate.py --parser both --hierarchical --hybrid-rrf --translate-to-english --output-path "output/results/hierarchical_2stage+hybrid+translate+[]/eval_result_hierarchical_hybrid_translate.csv"
-
-
-### 계층적 3단계 RAG 버전 ###
-
-# 계층적 3단계 모드 (GraphDB 또는 both 필요)
-python LLM/evaluate.py --parser both --hierarchical-3stage --output-path "output/results/hierarchical_3stage/eval_result_hierarchical_3stage.csv"
-
-# 계층적 3단계 모드 + ReRank
-python LLM/evaluate.py --parser both --hierarchical-3stage --rerank --graph-rerank --chroma-top-k 10 --rerank-top-m 5 --graph-k 10 --graph-rerank-top-m 5 --output-path "output/results/hierarchical_3stage+rerank/eval_result_hierarchical_3stage_rerank.csv"
-
-# 계층적 3단계 모드 + Hybrid Search
-python LLM/evaluate.py --parser both --hierarchical-3stage --hybrid-rrf --output-path "output/results/hierarchical_3stage+hybrid/eval_result_hierarchical_3stage_hybrid.csv"
-
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --data-path "새로운dataset경로" --output-path "결과저장경로"
 """
