@@ -916,7 +916,7 @@ class HSClassifier:
     {{
       "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
       "title": "string",
-      "reason": "string",           // 한국어, 200자 이내
+      "reason": "string",           // 한국어
       "citations": [
         {{"type": "graph", "code": "string"}},   // GraphDB 근거
         {{"type": "case", "doc_id": "string"}}   // VectorDB 근거
@@ -1387,7 +1387,7 @@ class HSClassifier:
     {{
       "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
       "title": "string",
-      "reason": "string",           // 한국어, 200자 이내
+      "reason": "string",           // 한국어
       "citations": [
         {{"type": "graph", "code": "string"}},   // GraphDB 근거
         {{"type": "case", "doc_id": "string"}}   // VectorDB 근거
@@ -1402,6 +1402,7 @@ class HSClassifier:
 3) **우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 선택하세요. 해당 컨텍스트에 적절한 코드가 없으면 전체 GraphDB Context에서 찾아 추천할 수 있습니다.**
 4) citations는 최소 1개 이상 포함.
 5) citations.type은 반드시 "graph" 또는 "case"만 가능.
+6) reason은 추천한 코드에 대한 정의와 사용자의 상품에 대한 비교를 기반으로 해당 코드를 추천한 이유를 길고 자세하게 작성. 
 """
         return system, user
     
