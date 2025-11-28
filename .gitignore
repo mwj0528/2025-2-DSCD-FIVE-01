@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+
+# venv
+.venv/
+env/
+venv/
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# secrets
+.env
+config.py
+
+# 산출물/데이터(원하면 계속 무시)
+dataset/
+chroma_db/
+
+# 빈 폴더 추적용
+!**/.gitkeep

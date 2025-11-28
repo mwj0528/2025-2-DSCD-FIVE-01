@@ -3,8 +3,23 @@ import sys
 import argparse
 import pandas as pd
 from tqdm import tqdm
-from rag_module import HSClassifier # 
-from sentence_transformers import SentenceTransformer, util
+import random
+import numpy as np
+import torch
+from rag_module import HSClassifier, set_all_seeds
+
+EMBED_MODEL_CHOICES = {
+    "openai_small": "text-embedding-3-small",
+    "openai_large": "text-embedding-3-large",
+    "paraphrase-multilingual-minilm-l12-v2": "paraphrase-multilingual-MiniLM-L12-v2",
+    "intfloat/multilingual-e5-small": "intfloat/multilingual-e5-small",
+}
+
+EMBED_CHROMA_DIR = {
+    "openai_small": "data/chroma_db_openai_small_kw",
+    "openai_large": "data/chroma_db_openai_large_kw",
+    "intfloat/multilingual-e5-small": "data/chroma_db_e5_small_kw",
+}
 
 def main():
     # ===== 커맨드라인 인자 파싱 =====
@@ -12,9 +27,9 @@ def main():
     parser.add_argument(
         "--parser",
         type=str,
-        choices=["chroma", "graph", "both"],
+        choices=["chroma", "graph", "both", "both+nomenclature"],
         default="both",
-        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(둘 다, 기본값)"
+        help="사용할 DB 설정: 'chroma'(ChromaDB만), 'graph'(GraphDB만), 'both'(ChromaDB+GraphDB), 'both+nomenclature'(ChromaDB+GraphDB+Nomenclature)"
     )
     parser.add_argument(
         "--no-keyword-extraction",
@@ -81,8 +96,85 @@ def main():
         default=5,
         help="Graph ReRank 후 상위 몇 개 후보 코드를 사용할지 (기본: 5)"
     )
+    # Graph 하이브리드는 공통 스위치(--hybrid-rrf)와 공통 K(--bm25-k, --rrf-k)를 그대로 사용합니다
+    # RRF Hybrid 옵션 (Semantic K + BM25 K → RRF)
+    parser.add_argument(
+        "--hybrid-rrf",
+        action="store_true",
+        help="Chroma에서 Semantic K + BM25 K를 RRF로 융합"
+    )
+    parser.add_argument(
+        "--bm25-k",
+        type=int,
+        default=5,
+        help="BM25에서 검색할 문서 수 (기본: 5)"
+    )
+    parser.add_argument(
+        "--rrf-k",
+        type=int,
+        default=60,
+        help="RRF 상수 k (기본: 60)"
+    )
+    # Listwise LLM-as-Reranker 옵션
+    parser.add_argument(
+        "--llm-listwise",
+        action="store_true",
+        help="Listwise LLM 재랭킹(슬라이딩 윈도우) 활성화"
+    )
+    parser.add_argument(
+        "--llm-listwise-window",
+        type=int,
+        default=10,
+        help="Listwise 윈도우 크기 w (기본: 10)"
+    )
+    parser.add_argument(
+        "--llm-listwise-step",
+        type=int,
+        default=5,
+        help="Listwise 스텝 s (기본: 5)"
+    )
+    parser.add_argument(
+        "--llm-listwise-max-cand",
+        type=int,
+        default=16,
+        help="Listwise 평가에 사용할 상위 후보 수 M (기본: 16)"
+    )
+    parser.add_argument(
+        "--llm-listwise-top-m",
+        type=int,
+        default=5,
+        help="Listwise 최종 상위 문서 수 (기본: 5)"
+    )
+    parser.add_argument(
+        "--hierarchical",
+        action="store_true",
+        help="계층적 2단계 RAG 사용: 1단계에서 6자리 예측, 2단계에서 10자리 예측 (기본: 미사용)"
+    )
+    parser.add_argument(
+        "--hierarchical-3stage",
+        action="store_true",
+        help="계층적 3단계 RAG 사용: 1단계에서 4자리 예측, 2단계에서 6자리 예측, 3단계에서 10자리 예측 (기본: 미사용)"
+    )
+    parser.add_argument(
+        "--translate-to-english",
+        action="store_true",
+        help="사용자 입력을 영어로 번역하여 RAG 검색 수행 (기본: 미사용)"
+    )
+    parser.add_argument(
+        "--embed-model",
+        type=str,
+        choices=list(EMBED_MODEL_CHOICES.keys()),
+        default="paraphrase-multilingual-minilm-l12-v2",
+        help="쿼리 임베딩에 사용할 SentenceTransformer/OpenAI 모델",
+    )
     
     args = parser.parse_args()
+    
+    # ===== 재현성을 위한 랜덤 시드 설정 =====
+    # 환경변수에서 seed 가져오기 (기본값: 42)
+    seed = int(os.getenv("SEED", "42"))
+    set_all_seeds(seed)
+    print(f"랜덤 시드 고정: {seed}")
     
     # ===== 데이터 로딩 =====
     if args.data_path:
@@ -91,6 +183,8 @@ def main():
         DATA_PATH = "data/eval_dataset_1031.csv"
     
     df = pd.read_csv(DATA_PATH)
+    # 재현성을 위해 데이터 순서 고정 (인덱스 기준 정렬)
+    df = df.sort_index().reset_index(drop=True)
     
     # 평가를 위한 주요 컬럼
     PRODUCT_NAME_COL = '사용자_상품명'
@@ -102,39 +196,72 @@ def main():
         out_path = args.output_path
     else:
         out_path = "output/results/eval_result.csv"
+    # 출력 디렉터리 생성(없으면 생성)
+    try:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    except Exception:
+        pass
     
     if os.path.exists(out_path):
         os.remove(out_path)
     
     # ===== HSClassifier 초기화 =====
+    # parser 옵션 파싱: nomenclature 사용 여부 확인 (출력용)
+    use_nomenclature = "+nomenclature" in args.parser
+    parser_type = args.parser.replace("+nomenclature", "")
+    
     print(f"=== HS Code 분류 평가 시작 ===")
-    print(f"Parser 설정: {args.parser}")
+    print(f"Parser 설정: {parser_type}")
+    print(f"Nomenclature ChromaDB: {'사용' if use_nomenclature else '미사용'}")
+    resolved_chroma_dir = EMBED_CHROMA_DIR.get(args.embed_model)
     print(f"키워드 추출: {'사용' if args.use_keyword_extraction else '미사용'}")
+    print(f"영어 번역: {'사용' if args.translate_to_english else '미사용'}")
+    print(f"임베딩 모델: {args.embed_model}")
+    if resolved_chroma_dir:
+        print(f"ChromaDB 디렉터리: {resolved_chroma_dir}")
+    if args.hierarchical_3stage:
+        print(f"계층적 모드: 3단계 사용")
+    elif args.hierarchical:
+        print(f"계층적 모드: 2단계 사용")
+    else:
+        print(f"계층적 모드: 미사용")
     print(f"데이터셋: {DATA_PATH}")
     print(f"결과 저장: {out_path}")
     print()
-
-    # ===== (추가!) 유사도 평가용 임베딩 모델 로드 =====
-    try:
-        # RAG가 사용하는 모델과 동일한 모델 사용
-        EVAL_EMBED_MODEL = os.getenv("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
-        print(f"유사도 평가 모델 로딩: {EVAL_EMBED_MODEL} (CPU 사용)")
-        eval_model = SentenceTransformer(EVAL_EMBED_MODEL, device="cpu")
-    except Exception as e:
-        print(f"오류: 유사도 평가 모델 로드 실패: {e}")
+    
+    # Hybrid 설정: 하나의 스위치/파라미터로 두 DB 모두에 적용
+    unified_hybrid = args.hybrid_rrf
+    unified_bm25_k = args.bm25_k
+    unified_rrf_k = args.rrf_k
+    
+    # 계층적 모드 검증
+    if (args.hierarchical or args.hierarchical_3stage) and parser_type not in ["graph", "both"]:
+        print("오류: 계층적 모드는 GraphDB가 필요합니다. --parser를 'graph' 또는 'both'로 설정하세요.")
         return 1
-    # =================================================
     
     try:
         classifier = HSClassifier(
-            parser_type=args.parser,
+            parser_type=parser_type,
+            chroma_dir=resolved_chroma_dir,
+            embed_model=EMBED_MODEL_CHOICES[args.embed_model],
             use_keyword_extraction=args.use_keyword_extraction,
+            use_rrf_hybrid=unified_hybrid,
+            bm25_k=unified_bm25_k,
+            rrf_k=unified_rrf_k,
             use_rerank=args.rerank,
             rerank_model=args.rerank_model,
             rerank_top_m=args.rerank_top_m,
             use_graph_rerank=args.graph_rerank,
             graph_rerank_model=args.graph_rerank_model,
-            graph_rerank_top_m=args.graph_rerank_top_m
+            graph_rerank_top_m=args.graph_rerank_top_m,
+            use_llm_rerank_listwise=args.llm_listwise,
+            llm_rerank_window=args.llm_listwise_window,
+            llm_rerank_step=args.llm_listwise_step,
+            llm_rerank_max_candidates=args.llm_listwise_max_cand,
+            llm_rerank_top_m=args.llm_listwise_top_m,
+            seed=seed,
+            translate_to_english=args.translate_to_english,
+            use_nomenclature=use_nomenclature
         )
     except Exception as e:
         print(f"오류: HSClassifier 초기화 실패: {e}")
@@ -144,34 +271,53 @@ def main():
     correct_top1 = 0
     correct_top3 = 0
     correct_top5 = 0
+    # Prefix 정확도 집계를 위한 카운터 (CSV는 변경하지 않음)
+    prefix_lengths = [2, 4, 6, 10]
+    prefix_correct = {
+        'Top1': {k: 0 for k in prefix_lengths},
+        'Top3': {k: 0 for k in prefix_lengths},
+        'Top5': {k: 0 for k in prefix_lengths},
+    }
     results = []
-
-    # ===== (추가!) 할루시네이션 점수 누적용 변수 =====
-    total_score_input_reason = 0.0 # (방법 2: 입력-근거 충실도)
-    total_score_groundedness = 0.0 # (방법 3: RAG-근거 충실도)
-    valid_score_count = 0 # 점수 계산이 유효했던 샘플 수
-    # =================================================
     
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="평가 진행"):
         prod_name = str(row[PRODUCT_NAME_COL])
         prod_desc = str(row[PRODUCT_DESC_COL])
         gt_hs = str(row[GT_HSCODE_COL])
         try:
-            # ===== (수정!) 컨텍스트를 함께 반환받음 =====
-            pred, rag_context_str = classifier.classify_hs_code(
-                product_name=prod_name,
-                product_description=prod_desc,
-                top_n=5,
-                chroma_top_k=args.chroma_top_k,
-                graph_k=args.graph_k,
-                debug_return_context=True # 1단계에서 추가한 플래그
-            )
-            # ========================================
+            if args.hierarchical_3stage:
+                # 계층적 3단계 RAG 사용
+                pred = classifier.classify_hs_code_hierarchical_3stage(
+                    product_name=prod_name,
+                    product_description=prod_desc,
+                    top_n=5,
+                    chroma_top_k=args.chroma_top_k,
+                    graph_k=args.graph_k
+                )
+            elif args.hierarchical:
+                # 계층적 2단계 RAG 사용
+                pred = classifier.classify_hs_code_hierarchical(
+                    product_name=prod_name,
+                    product_description=prod_desc,
+                    top_n=5,
+                    chroma_top_k=args.chroma_top_k,
+                    graph_k=args.graph_k
+                )
+            else:
+                # 기존 1단계 RAG 사용
+                pred = classifier.classify_hs_code(
+                    product_name=prod_name,
+                    product_description=prod_desc,
+                    top_n=5,
+                    chroma_top_k=args.chroma_top_k,
+                    graph_k=args.graph_k
+                )
             candidates = pred.get('candidates', [])
 
             # 비교 단순화: gt/예측 모두 점/하이픈 제거 후 비교
             pred_hs_list = [str(c['hs_code']).replace('.', '').replace('-', '') for c in candidates]
-            gt_hs_10 = gt_hs.replace('.', '').replace('-', '')[:10]
+            gt_clean = gt_hs.replace('.', '').replace('-', '')
+            gt_hs_10 = gt_clean[:10]
             match_top1 = (len(pred_hs_list) > 0 and pred_hs_list[0][:10] == gt_hs_10)
             match_top3 = any(hs[:10] == gt_hs_10 for hs in pred_hs_list[:3])
             match_top5 = any(hs[:10] == gt_hs_10 for hs in pred_hs_list[:5])
@@ -179,35 +325,21 @@ def main():
             correct_top3 += int(match_top3)
             correct_top5 += int(match_top5)
 
-            # ===== (추가!) 할루시네이션 점수 계산 (신규 로직) =====
-            score_input_reason = 0.0
-            score_groundedness = 0.0
- 
-            # (LLM이 근거를 생성했고, RAG 컨텍스트도 존재할 때만 계산)
-            if candidates and candidates[0].get('reason') and rag_context_str:
-                try:
-                    # (A) 사용자 원본 입력 (Input)
-                    vec_A_input = eval_model.encode(f"{prod_name}\n{prod_desc}")
- 
-                    # (C) LLM이 생성한 1순위 근거 (Reason)
-                    reason_text = candidates[0]['reason']
-                    vec_C_reason = eval_model.encode(reason_text)
- 
-                     # (D) RAG가 제공한 컨텍스트 (Context)
-                    vec_D_context = eval_model.encode(rag_context_str)
+            # Prefix(2/4/6/10) 매칭 집계 (CSV는 변경하지 않음)
+            def any_prefix_match(gt: str, preds: list, k: int) -> bool:
+                if not gt or not preds:
+                    return False
+                gtp = gt[:k]
+                return any(str(p)[:k] == gtp for p in preds)
 
-                     #  입력-근거 충실도 (A vs C)
-                    score_input_reason = util.cos_sim(vec_A_input, vec_C_reason)[0][0].item()
- 
-                     #  RAG-근거 충실도 (C vs D)
-                    score_groundedness = util.cos_sim(vec_C_reason, vec_D_context)[0][0].item()
+            top1_list = pred_hs_list[:1]
+            top3_list = pred_hs_list[:3]
+            top5_list = pred_hs_list[:5]
 
-                    total_score_input_reason += score_input_reason
-                    total_score_groundedness += score_groundedness
-                    valid_score_count += 1
-                except Exception as e_sim:
-                    print(f"경고: {idx}행 유사도 계산 실패: {e_sim}")
-            # =====================================================
+            for k in prefix_lengths:
+                prefix_correct['Top1'][k] += int(any_prefix_match(gt_clean, top1_list, k))
+                prefix_correct['Top3'][k] += int(any_prefix_match(gt_clean, top3_list, k))
+                prefix_correct['Top5'][k] += int(any_prefix_match(gt_clean, top5_list, k))
 
             result_row = {
                 'GT': gt_hs,
@@ -216,9 +348,7 @@ def main():
                 'Top5_pred': pred_hs_list,
                 'Top1_match': match_top1,
                 'Top3_match': match_top3,
-                'Top5_match': match_top5,
-                'score_input_reason': score_input_reason, # (추가!)
-                'score_groundedness': score_groundedness # (추가!)
+                'Top5_match': match_top5
             }
             results.append(result_row)
 
@@ -234,8 +364,6 @@ def main():
                 'Top1_match': False,
                 'Top3_match': False,
                 'Top5_match': False,
-                'score_input_reason': None, # (추가!)
-                'score_groundedness': None, # (추가!)
                 'error': str(e)
             }
             results.append(result_row)
@@ -246,26 +374,12 @@ def main():
     top1_acc = correct_top1 / total if total > 0 else 0
     top3_acc = correct_top3 / total if total > 0 else 0
     top5_acc = correct_top5 / total if total > 0 else 0
-
-    # ===== (추가!) 할루시네이션 평균 점수 계산 =====
-    avg_input_reason = total_score_input_reason / valid_score_count if valid_score_count > 0 else 0
-    avg_groundedness = total_score_groundedness / valid_score_count if valid_score_count > 0 else 0
-    # ==============================================
     
     print("\n=== 평가 결과 ===")
     print(f"총 샘플 수: {total}")
     print(f"Top-1 정확도: {top1_acc:.3f} ({correct_top1}/{total})")
     print(f"Top-3 정확도: {top3_acc:.3f} ({correct_top3}/{total})")
     print(f"Top-5 정확도: {top5_acc:.3f} ({correct_top5}/{total})")
-
-
-    # ===== (추가!) 할루시네이션 결과 print =====
-    print("\n=== 평가 결과 (Hallucination) ===")
-    print(f"(점수 유효 샘플: {valid_score_count}/{total})")
-    print(f"입력-근거 충실도 : {avg_input_reason:.3f}")
-    print(f"RAG-근거 충실도 : {avg_groundedness:.3f}")
-    # ========================================
-
     print(f"상세 결과 저장: {out_path}")
     
     # ===== 요약 결과 TXT 저장 =====
@@ -276,11 +390,21 @@ def main():
         f"Top-1 정확도: {top1_acc:.3f} ({correct_top1}/{total})\n",
         f"Top-3 정확도: {top3_acc:.3f} ({correct_top3}/{total})\n",
         f"Top-5 정확도: {top5_acc:.3f} ({correct_top5}/{total})\n",
-        "===\n", # (추가!)
-        f"입력-근거 충실도 (Avg): {avg_input_reason:.3f}\n", # (추가!)
-        f"RAG-근거 충실도 (Avg): {avg_groundedness:.3f}\n", # (추가!)
-        f"(점수 유효 샘플: {valid_score_count}/{total})\n", # (추가!)
-        "===\n", # (추가!)
+        "Top-1 정확도\n",
+        f"2자리 정확도: { (prefix_correct['Top1'][2] / total if total else 0):.3f} ({prefix_correct['Top1'][2]}/{total})\n",
+        f"4자리 정확도: { (prefix_correct['Top1'][4] / total if total else 0):.3f} ({prefix_correct['Top1'][4]}/{total})\n",
+        f"6자리 정확도: { (prefix_correct['Top1'][6] / total if total else 0):.3f} ({prefix_correct['Top1'][6]}/{total})\n",
+        f"10자리 정확도: { (prefix_correct['Top1'][10] / total if total else 0):.3f} ({prefix_correct['Top1'][10]}/{total})\n",
+        "Top-3 정확도\n",
+        f"2자리 정확도: { (prefix_correct['Top3'][2] / total if total else 0):.3f} ({prefix_correct['Top3'][2]}/{total})\n",
+        f"4자리 정확도: { (prefix_correct['Top3'][4] / total if total else 0):.3f} ({prefix_correct['Top3'][4]}/{total})\n",
+        f"6자리 정확도: { (prefix_correct['Top3'][6] / total if total else 0):.3f} ({prefix_correct['Top3'][6]}/{total})\n",
+        f"10자리 정확도: { (prefix_correct['Top3'][10] / total if total else 0):.3f} ({prefix_correct['Top3'][10]}/{total})\n",
+        "Top-5 정확도\n",
+        f"2자리 정확도: { (prefix_correct['Top5'][2] / total if total else 0):.3f} ({prefix_correct['Top5'][2]}/{total})\n",
+        f"4자리 정확도: { (prefix_correct['Top5'][4] / total if total else 0):.3f} ({prefix_correct['Top5'][4]}/{total})\n",
+        f"6자리 정확도: { (prefix_correct['Top5'][6] / total if total else 0):.3f} ({prefix_correct['Top5'][6]}/{total})\n",
+        f"10자리 정확도: { (prefix_correct['Top5'][10] / total if total else 0):.3f} ({prefix_correct['Top5'][10]}/{total})\n",
         f"세부 CSV: {out_path}\n",
     ]
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -294,38 +418,22 @@ if __name__ == "__main__":
     exit(main())
 
 """
+### openai_large 임베딩 모델 사용 버전(--embed-model openai_large) ###
 
-### 키워드 추출하는 버전 ###
+# 1stage model(--output-path 결과저장경로)
 
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma
+python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large/eval_result.csv"
 
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph
+# 2stage(--hierarchical --output-path 결과저장경로)
 
-# 둘 다 사용
-python LLM/evaluate.py --parser both
+python LLM/evaluate.py --parser both --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule/eval_result.csv"
 
-### 키워드 추출 사용 안 하는 버전 ###
+# 2stage + nomenclature(--parser both+nomenclature --hierarchical --output-path 결과저장경로)
 
-# ChromaDB만 사용
-python LLM/evaluate.py --parser chroma --no-keyword-extraction
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --output-path "output/results/hierarchical_2stage_openai_large_rule_nomenclature/eval_result.csv"
 
-# GraphDB만 사용
-python LLM/evaluate.py --parser graph --no-keyword-extraction
 
-# 둘 다 사용
-python LLM/evaluate.py --parser both --no-keyword-extraction
+# 2stage + nomenclature + 새로운 dataset(--parser both+nomenclature --hierarchical --data-path 새로운dataset경로 --output-path 결과저장경로)
 
-### ReRank 적용 버전 ###
-
-# ChromaDB ReRank 적용
-python LLM/evaluate.py --parser chroma --no-keyword-extraction --rerank
-
-# GraphDB ReRank 적용
-python LLM/evaluate.py --parser graph --no-keyword-extraction --graph-rerank
-
-# 둘 다 ReRank 적용
-python LLM/evaluate.py --parser both --no-keyword-extraction --rerank --graph-rerank
-
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --data-path "새로운dataset경로" --output-path "결과저장경로"
 """
