@@ -33,7 +33,7 @@ print("[rag_service] RAG 엔진 로딩 완료!")
 
 
 # === 2. FastAPI/Chainlit에서 공동으로 사용할 함수 ===
-def classify_hs(product_name: str, product_desc: str, top_n: int = 3):
+def classify_hs(product_name: str, product_desc: str, top_n: int = 5):
     """
     Chainlit, FastAPI 어디서든 호출 가능한 공통 함수.
     RAG 기반 HS 코드 추천을 수행한다.

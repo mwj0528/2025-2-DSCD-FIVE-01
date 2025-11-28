@@ -44,7 +44,7 @@ class HSResponse(BaseModel):
 @app.post("/api/classify", response_model=HSResponse)
 async def api_classify(item: ItemInput):
     try:
-        raw = classify_hs(item.name, item.desc, top_n=3)
+        raw = classify_hs(item.name, item.desc, top_n=5) #5개로 수정
 
         # chainlit에서 쓰던 result_json 형식 재사용
         cand_list = raw.get("candidates", raw.get("top_k_results", []))
