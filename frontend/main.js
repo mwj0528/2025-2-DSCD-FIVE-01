@@ -241,31 +241,50 @@ async function handleSend() {
         const list = data.candidates || [];
 
         if (!list.length) {
-          bot("추천 결과가 없습니다. 설명을 조금 더 구체적으로 수정해 다시 시도해주세요.");
+          bot("추천 결과가 없습니다. 설명을 보강하여 다시 시도해주세요.");
         } else {
-          list.forEach((c, i) => {
-            const hs = c.hs_code || "-";
-            const title = c.title || "-";
-            const reason = c.reason || "-";
+          
+          // 🔄 [수정] 결과를 하나씩 시간차를 두고 출력하는 함수
+          const showResultSequentially = async () => {
+            for (let i = 0; i < list.length; i++) {
+              const c = list[i];
+              const hs = c.hs_code || "-";
+              const title = c.title || "-";
+              const reason = c.reason || "-";
 
-            bot(
+              // 1. 메시지 생성 및 출력
+              bot(
               `⭐ 추천 ${i + 1}\n` +
               `HS Code: ${hs}\n` +
               `품목명: ${title}\n\n` +
               `💡 사유:\n${reason}`
             );
-          });
-          
-          // 히스토리 저장
-          addHistoryEntry(productName, list[0]);
+
+              // 2. 다음 메시지 출력 전까지 잠깐 대기 (예: 0.8초)
+              // (마지막 메시지 후에는 대기할 필요 없음)
+              if (i < list.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 800)); 
+              }
+            }
+
+            // 3. 모든 결과 출력 후 히스토리 저장 및 마무리 멘트
+            if (typeof addHistoryEntry === "function") {
+              addHistoryEntry(productName, list[0]);
+            }
+
+            step = "awaiting_name";
+            updatePlaceholder();
+            
+            // 마무리 멘트도 약간 딜레이 후 출력
+            setTimeout(() => {
+              bot("✅ 분석이 끝났습니다. 새로운 상품을 분류하려면 '상품명'을 다시 입력해주세요.");
+            }, 600);
+          };
+
+          // 함수 실행!
+          showResultSequentially();
         }
       }
-
-      // 마무리
-      step = "awaiting_name";
-      updatePlaceholder();
-      bot("✅ 분석이 끝났습니다. 새로운 상품을 분류하려면 '상품명'을 다시 입력해주세요.");
-
     } catch (err) {
       hideLoading(); // 에러 나도 로딩은 꺼야 함
       bot("요청 중 통신 오류가 발생했습니다: " + err.message);
