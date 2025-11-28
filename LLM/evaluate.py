@@ -543,4 +543,7 @@ python LLM/evaluate.py --parser both --hierarchical-3stage --embed-model openai_
 
 # 3stage + nomenclature
 python LLM/evaluate.py --parser both+nomenclature --hierarchical-3stage --embed-model openai_large --output-path "output/results/hierarchical_3stage_openai_large_rule_nomenclature/eval_result.csv"
+
+# 2stage + nomenclature + new_testset
+python LLM/evaluate.py --parser both+nomenclature --hierarchical --embed-model openai_large --data-path "output/test100_natural.csv"--output-path "output/results/hierarchical_2stage_openai_large_rule_nomenclature/eval_result.csv"
 """
