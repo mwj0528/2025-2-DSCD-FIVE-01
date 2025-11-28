@@ -136,130 +136,142 @@ function loadHistorySession(sessionId) {
 
 // ===================== 메인 전송 로직 =====================
 
-async function handleSend() {
-  const text = inputEl.value.trim();
-  if (!text) return;
+// ===== 🆕 로딩 표시 함수 추가 =====
+let currentLoader = null; // 로딩 메시지 요소를 저장할 변수
 
-  // 로딩 중 같은 내용 반복 전송 방지
-  if (text === lastUserText && step === "loading") return;
-  lastUserText = text;
+function showLoading() {
+  const div = document.createElement("div");
+  div.className = "msg loading"; 
+  
+  // 초기 멘트 + 점 3개
+  // span에 id를 줘서 나중에 글씨를 바꿀 수 있게 함
+  div.innerHTML = `
+    <span id="loading-text">추천 시스템이 분석을 시작합니다...</span>
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+  `;
+  
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  currentLoader = div;
 
-  // 새 상품명 입력이면 "새 분류 대화" 시작 → 버퍼 초기화
-  if (step === "awaiting_name") {
-    currentMessages = [];
-  }
+  // 🔄 멘트가 3단계로 바뀌는 타이머 설정
+  let timePassed = 0;
+  const loadingTextEl = div.querySelector("#loading-text");
 
-  user(text);
-  inputEl.value = "";
+  loaderInterval = setInterval(() => {
+    timePassed += 1;
 
-  // --- Step 1: 상품명 입력 ---
-  if (step === "awaiting_name") {
-    productName = text;
-
-    bot(
-      `✅ 상품명 '${productName}'(을)를 확인했습니다.\n\n` +
-      "이제 상품 설명을 입력해주세요.\n" +
-      "예) '알루미늄 하우징을 사용한 실내용 LED 조명기구로, 220V 전원에 연결해 사용합니다.'"
-    );
-
-    step = "awaiting_desc";
-    updatePlaceholder();
-    return;
-  }
-
-  // --- Step 2: 상품 설명 입력 & 길이 검증 ---
-  if (step === "awaiting_desc") {
-    const desc = text;
-
-    if (desc.length < 10) {
-      bot(
-        "상품 설명이 너무 짧습니다.\n" +
-        "재질, 용도, 구조 등을 조금 더 자세히 적어주세요.\n" +
-        "예) '플라스틱 하우징과 LED 모듈로 구성된 실내용 벽부착 조명기구입니다.'"
-      );
-      return;
+    if (timePassed === 6) {
+      loadingTextEl.innerText = "1단계: 유사 품목 사례와 HS 계층 구조를 검색하고 있습니다...";
+    } else if (timePassed === 11) {
+      loadingTextEl.innerText = "2단계: 6자리 및 10자리 HS Code 후보를 점수화하고 있습니다...";
+    } else if (timePassed === 16) {
+      loadingTextEl.innerText = "3단계: 각 후보의 분류 근거를 생성하고 있습니다...";
+    } else if (timePassed === 26) {
+        loadingTextEl.innerText = "✍️ 결과를 정리하고 있습니다...";
     }
+  }, 1000); // 1초마다 체크
+}
 
-    step = "loading";
+function hideLoading() {
+  // 타이머 멈춤
+  if (loaderInterval) {
+    clearInterval(loaderInterval);
+    loaderInterval = null;
+  }
+  // 로딩바 제거
+  if (currentLoader) {
+    currentLoader.remove();
+    currentLoader = null;
+  }
+}
+
+// 로딩 적용//
+
+async function handleSend() {
+  if (step === "awaiting_name") {
+    // 1. 상품명 입력 단계
+    const text = inputEl.value.trim();
+    if (!text) return;
+
+    user(text);
+    inputEl.value = "";
+    productName = text; // 상품명 저장
+
+    step = "awaiting_desc"; // 다음 단계로
     updatePlaceholder();
+    
+    // 봇 응답 (약간의 딜레이를 주어 자연스럽게)
+    setTimeout(() => {
+      bot(`✅ 상품명 '${productName}'(을)를 확인했습니다.\n\n` +
+      "이제 상품 설명을 입력해주세요.\n" +
+      "예) '알루미늄 하우징을 사용한 실내용 LED 조명기구로, 220V 전원에 연결해 사용합니다.'");
+    }, 500);
 
-    // ===== 로딩 단계 메시지 =====
-    bot("HS Code를 분석 중입니다...");
+  } else if (step === "awaiting_desc") {
+    // 2. 상품 설명 입력 & 분석 요청 단계
+    const description = inputEl.value.trim();
+    if (!description) return;
 
-    loadingTimers.forEach(clearTimeout);
-    loadingTimers = [];
+    user(description);
+    inputEl.value = "";
 
-    loadingTimers.push(
-      setTimeout(() => {
-        bot("1단계: 유사 품목 사례와 HS 계층 구조를 검색하고 있습니다.");
-      }, 700)
-    );
+    // ⏳ [핵심] 분석 시작 전 로딩 표시 띄우기!
+    showLoading(); 
 
-    loadingTimers.push(
-      setTimeout(() => {
-        bot("2단계: 6자리 및 10자리 HS Code 후보를 점수화하고 있습니다.");
-      }, 1500)
-    );
-
-    loadingTimers.push(
-      setTimeout(() => {
-        bot("3단계: 각 후보의 분류 근거를 생성하고 있습니다.");
-      }, 2300)
-    );
-
-    // ===== 백엔드 요청 =====
-    let data;
     try {
-      const res = await fetch("/api/classify", {
+      // API 요청 (시간이 오래 걸림)
+      const response = await fetch("/api/classify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: productName, desc }),
+        body: JSON.stringify({ name: productName, desc: description })
       });
-      data = await res.json();
-    } catch (err) {
-      loadingTimers.forEach(clearTimeout);
-      loadingTimers = [];
-      bot("요청 중 오류가 발생했습니다: " + err.message);
+
+      const data = await response.json();
+
+      // 🏁 [핵심] 응답 오면 로딩 제거!
+      hideLoading();
+
+      // 결과 처리
+      if (data.error || data.detail) {
+        bot("🚫 오류가 발생했습니다: " + (data.error || data.detail));
+      } else {
+        const list = data.candidates || [];
+
+        if (!list.length) {
+          bot("추천 결과가 없습니다. 설명을 조금 더 구체적으로 수정해 다시 시도해주세요.");
+        } else {
+          list.forEach((c, i) => {
+            const hs = c.hs_code || "-";
+            const title = c.title || "-";
+            const reason = c.reason || "-";
+
+            bot(
+              `⭐ 추천 ${i + 1}\n` +
+              `HS Code: ${hs}\n` +
+              `품목명: ${title}\n\n` +
+              `💡 사유:\n${reason}`
+            );
+          });
+          
+          // 히스토리 저장
+          addHistoryEntry(productName, list[0]);
+        }
+      }
+
+      // 마무리
       step = "awaiting_name";
       updatePlaceholder();
-      return;
+      bot("✅ 분석이 끝났습니다. 새로운 상품을 분류하려면 '상품명'을 다시 입력해주세요.");
+
+    } catch (err) {
+      hideLoading(); // 에러 나도 로딩은 꺼야 함
+      bot("요청 중 통신 오류가 발생했습니다: " + err.message);
+      step = "awaiting_name";
+      updatePlaceholder();
     }
-
-    loadingTimers.forEach(clearTimeout);
-    loadingTimers = [];
-
-    // ===== 결과 처리 =====
-    if (data.error || data.detail) {
-      bot("🚫 오류가 발생했습니다: " + (data.error || data.detail));
-    } else {
-      const list = data.candidates || [];
-
-      if (!list.length) {
-        bot("추천 결과가 없습니다. 설명을 조금 더 구체적으로 수정해 다시 시도해주세요.");
-      } else {
-        list.forEach((c, i) => {
-          const hs = c.hs_code || "-";
-          const title = c.title || "-";
-          const reason = c.reason || "-";
-
-          bot(
-            `⭐ 추천 ${i + 1}\n` +
-            `HS Code: ${hs}\n` +
-            `품목명: ${title}\n\n` +
-            `사유: ${reason}`
-          );
-        });
-
-        // 이 분류 대화 전체를 스냅샷으로 저장 → 사이드바 카드에 연결
-        addHistoryEntry(productName, list[0]);
-      }
-    }
-
-    // 다음 분류를 위해 상태만 초기화 (화면은 그대로 두고)
-    step = "awaiting_name";
-    updatePlaceholder();
-    bot("새로운 상품을 분류하려면 다시 상품명을 입력해주세요. (예: LED 조명, 냉동 삼겹살)");
-    return;
   }
 }
 
