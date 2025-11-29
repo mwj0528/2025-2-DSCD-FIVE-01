@@ -67,8 +67,8 @@ def main():
     parser.add_argument(
         "--top-n",
         type=int,
-        default=3,
-        help="추천할 후보 개수 (기본값: 3)"
+        default=5,
+        help="추천할 후보 개수 (기본값: 5)"
     )
     parser.add_argument(
         "--chroma-top-k",
@@ -344,6 +344,59 @@ def main():
         # 추론 종료 시간 측정
         end_time = time.perf_counter()
         inference_time = end_time - start_time
+
+        if isinstance(result, dict) and (args.hierarchical or args.hierarchical_3stage):
+            print("\n=== 계층형 Stage 컨텍스트 ===")
+
+            if args.hierarchical:
+                step1_codes = result.get("step1_6digit_codes")
+                if step1_codes:
+                    print(f"- Stage1 (6자리) 예측 코드: {', '.join(step1_codes)}")
+
+                stage2_graph = result.get("graphDB_context_step2") or ""
+                if stage2_graph.strip():
+                    print("\n--- Stage2 입력용 GraphDB 컨텍스트 (Stage1 결과 반영) ---")
+                    print(stage2_graph)
+
+                stage2_chroma = result.get("chromaDB_context_step2") or ""
+                if stage2_chroma.strip():
+                    print("\n--- Stage2 입력용 VectorDB 컨텍스트 (Stage1 결과 반영) ---")
+                    print(stage2_chroma)
+
+            elif args.hierarchical_3stage:
+                step1_codes = result.get("step1_4digit_codes")
+                if step1_codes:
+                    print(f"- Stage1 (4자리) 예측 코드: {', '.join(step1_codes)}")
+
+                stage2_graph = result.get("graphDB_context_step2") or ""
+                if stage2_graph.strip():
+                    print("\n--- Stage2 입력용 GraphDB 컨텍스트 (Stage1 결과 반영) ---")
+                    print(stage2_graph)
+
+                stage2_chroma = result.get("chromaDB_context_step2") or ""
+                if stage2_chroma.strip():
+                    print("\n--- Stage2 입력용 VectorDB 컨텍스트 (Stage1 결과 반영) ---")
+                    print(stage2_chroma)
+
+                step2_codes = result.get("step2_6digit_codes")
+                if step2_codes:
+                    print(f"- Stage2 (6자리) 예측 코드: {', '.join(step2_codes)}")
+
+                stage3_graph = result.get("graphDB_context_step3") or ""
+                if stage3_graph.strip():
+                    print("\n--- Stage3 입력용 GraphDB 컨텍스트 (Stage2 결과 반영) ---")
+                    print(stage3_graph)
+
+                stage3_chroma = result.get("chromaDB_context_step3") or ""
+                if stage3_chroma.strip():
+                    print("\n--- Stage3 입력용 VectorDB 컨텍스트 (Stage2 결과 반영) ---")
+                    print(stage3_chroma)
+        
+        # 최종 JSON에서는 컨텍스트 문자열 제거
+        if isinstance(result, dict):
+            context_keys = [k for k in list(result.keys()) if "context" in k.lower()]
+            for key in context_keys:
+                result.pop(key, None)
         
         print("\n=== 분류 결과 ===")
         print(f"추론 시간: {inference_time:.2f}초 ({inference_time:.3f}초)")
@@ -434,7 +487,7 @@ if __name__ == "__main__":
 
  python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "LED lamp" --desc "This product is a finished LED lamp with a plastic housing and a built-in semiconductor LED light source. It is designed to provide illumination and includes internal driver electronics. The lamp is made mainly of plastic materials such as polycarbonate. It is sold as a complete product, not as a part or kit. Typical size ranges from approximately 50–100 mm in diameter and 50–150 mm in height."
 
- python LLM/run_rag.py --parser both --hierarchical-3stage --embed-model openai_large --name "인공눈물" --desc "눈에 넣는 윤활제로 안구 질환을 예방하고 통증을 완화하는 제품입니다."
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "DISK NUT ASSY(TES62-300)" --desc "- 나선 가공한 홀(볼트 삽입용)을 가진 원형의 구리 합금 재질 물품 (신청 물품) - 재질: C3771(황동), 크기: M12(나사지름) × ∅106(전체 외경) × 15(두께) - 용도: 변압기의 누설 전류를 줄이는 탱크 실드(차폐판)를 탱크 내벽에 지지 및 고정하기 위해 사용"
  
  
  """
