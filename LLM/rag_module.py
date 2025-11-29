@@ -762,6 +762,99 @@ class HSClassifier:
             print(f"GraphDB 검색 오류: {e}")
             return ""
     
+    def _get_code_definition(self, code: str) -> str:
+        """GraphDB에서 특정 코드의 정의(description)를 가져옴"""
+        if self._graph_rag is None or not code:
+            return ""
+        
+        try:
+            # 코드 정규화 (점 제거)
+            code_clean = code.replace('.', '').replace('-', '')
+            
+            # 다양한 형식으로 시도
+            code_variants = [code_clean]
+            if '.' in code:
+                code_variants.append(code)
+            if len(code_clean) >= 4:
+                # 4자리 이상이면 점 있는 형식도 추가
+                if len(code_clean) == 4:
+                    code_variants.append(code_clean)
+                elif len(code_clean) == 6:
+                    code_variants.append(f"{code_clean[:4]}.{code_clean[4:6]}")
+                elif len(code_clean) == 10:
+                    code_variants.append(f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}")
+            
+            # 중복 제거
+            code_variants = list(set(code_variants))
+            candidates_str = str(code_variants).replace("'", '"')
+            
+            # Cypher 쿼리로 description 조회
+            cypher_query = f"""
+            UNWIND {candidates_str} AS code_str
+            MATCH (item:HSItem {{code: code_str}})
+            RETURN item.code AS code, item.description AS description
+            LIMIT 1
+            """
+            
+            results = self._graph_rag.graph.query(cypher_query)
+            if results and len(results) > 0:
+                return results[0].get('description', '') or ''
+            return ""
+        except Exception as e:
+            print(f"경고: 코드 정의 조회 실패 ({code}): {e}")
+            return ""
+    
+    def _add_hierarchy_definitions(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """각 candidate의 10자리 코드에서 계층별 정의를 추출하여 추가"""
+        if not candidates or self._graph_rag is None:
+            return candidates
+        
+        for candidate in candidates:
+            hs_code = str(candidate.get('hs_code', ''))
+            if not hs_code:
+                continue
+            
+            # 10자리 코드 정규화 (점 제거)
+            code_clean = hs_code.replace('.', '').replace('-', '')
+            
+            if len(code_clean) < 10:
+                # 10자리가 아니면 스킵
+                continue
+            
+            # 각 계층 코드 추출
+            code_2digit = code_clean[:2]  # 2자리
+            code_4digit = code_clean[:4]  # 4자리
+            code_6digit = f"{code_clean[:4]}.{code_clean[4:6]}"  # 6자리 (점 포함)
+            code_10digit = f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}"  # 10자리 (점 포함)
+            
+            # 각 계층의 정의 조회
+            definition_2digit = self._get_code_definition(code_2digit)
+            definition_4digit = self._get_code_definition(code_4digit)
+            definition_6digit = self._get_code_definition(code_6digit)
+            definition_10digit = self._get_code_definition(code_10digit)
+            
+            # candidate에 추가
+            candidate['hierarchy_definitions'] = {
+                'chapter_2digit': {
+                    'code': code_2digit,
+                    'definition': definition_2digit
+                },
+                'heading_4digit': {
+                    'code': code_4digit,
+                    'definition': definition_4digit
+                },
+                'subheading_6digit': {
+                    'code': code_6digit,
+                    'definition': definition_6digit
+                },
+                'national_10digit': {
+                    'code': code_10digit,
+                    'definition': definition_10digit
+                }
+            }
+        
+        return candidates
+    
     def _format_chroma_context(self, hits: List[Dict[str, Any]], max_docs: int = 10) -> str:
         """ChromaDB 검색 결과를 컨텍스트 문자열로 포맷팅 (case data용)"""
         def _pick(meta, keys, default=""):
@@ -916,7 +1009,7 @@ class HSClassifier:
     {{
       "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
       "title": "string",
-      "reason": "string",           // 한국어, 200자 이내
+      "reason": "string",           // 한국어
       "citations": [
         {{"type": "graph", "code": "string"}},   // GraphDB 근거
         {{"type": "case", "doc_id": "string"}}   // VectorDB 근거
@@ -1387,7 +1480,7 @@ class HSClassifier:
     {{
       "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
       "title": "string",
-      "reason": "string",           // 한국어, 200자 이내
+      "reason": "string",           // 한국어
       "citations": [
         {{"type": "graph", "code": "string"}},   // GraphDB 근거
         {{"type": "case", "doc_id": "string"}}   // VectorDB 근거
@@ -1402,6 +1495,7 @@ class HSClassifier:
 3) **우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 선택하세요. 해당 컨텍스트에 적절한 코드가 없으면 전체 GraphDB Context에서 찾아 추천할 수 있습니다.**
 4) citations는 최소 1개 이상 포함.
 5) citations.type은 반드시 "graph" 또는 "case"만 가능.
+6) reason은 추천한 코드에 대한 정의와 사용자의 상품에 대한 비교를 기반으로 해당 코드를 추천한 이유를 길고 자세하게 작성. 
 """
         return system, user
     
@@ -1562,7 +1656,7 @@ class HSClassifier:
         result, err = _parse_json_safely(output_text)
         if err:
             result = {"error": err, "raw_output": output_text}
-        
+ 
         # context 정보 추가
         # result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
         # result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
@@ -1752,9 +1846,10 @@ class HSClassifier:
                 "step1_result": result_6digit
             }
         
-        # 최종 결과에 1단계 정보도 포함
-        result_10digit["step1_6digit_codes"] = six_digit_codes
-        result_10digit["step1_result"] = result_6digit
+        # 각 candidate에 계층별 정의 추가
+        if "candidates" in result_10digit and isinstance(result_10digit["candidates"], list):
+            result_10digit["candidates"] = self._add_hierarchy_definitions(result_10digit["candidates"])
+
         
         # context 정보 추가 (1단계: 6자리 예측용 context)
         vector_context_step1 = ""
@@ -1776,8 +1871,13 @@ class HSClassifier:
         
         # 하위 호환성을 위해 기존 필드명도 유지 (2단계 context)
         result_10digit["chromaDB_context"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
-        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
-        
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else "
+
+        # Nomenclature 컨텍스트 공유 (Stage1/Stage2)
+        # nom_ctx = nomenclature_context if self.use_nomenclature else ""
+        # result_10digit["nomenclature_context_step1"] = nom_ctx
+        # result_10digit["nomenclature_context_step2"] = nom_ctx
+        # result_10digit["nomenclature_context"] = nom_ctx        
         return result_10digit
     
     def classify_hs_code_hierarchical_3stage(
@@ -2064,6 +2164,10 @@ class HSClassifier:
         result_10digit["step2_6digit_codes"] = six_digit_codes
         result_10digit["step2_result"] = result_6digit
         
+        # 각 candidate에 계층별 정의 추가
+        if "candidates" in result_10digit and isinstance(result_10digit["candidates"], list):
+            result_10digit["candidates"] = self._add_hierarchy_definitions(result_10digit["candidates"])
+        
         # context 정보 추가 (1단계: 4자리 예측용 context)
         vector_context_step1 = ""
         if self.parser_type in ["chroma", "both"]:
@@ -2095,6 +2199,13 @@ class HSClassifier:
         # 하위 호환성을 위해 기존 필드명도 유지 (3단계 context)
         result_10digit["chromaDB_context"] = vector_context_step3 if self.parser_type in ["chroma", "both"] else ""
         result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+
+        # Nomenclature 컨텍스트 공유 (Stage1/Stage2/Stage3)
+        # nom_ctx = nomenclature_context if self.use_nomenclature else ""
+        # result_10digit["nomenclature_context_step1"] = nom_ctx
+        # result_10digit["nomenclature_context_step2"] = nom_ctx
+        # result_10digit["nomenclature_context_step3"] = nom_ctx
+        # result_10digit["nomenclature_context"] = nom_ctx
         
         return result_10digit
     
