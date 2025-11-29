@@ -168,6 +168,38 @@ def translate_to_english(text: str, client: OpenAI, model: str = "gpt-4o-mini") 
         print(f"경고: 번역 실패, 원본 텍스트 사용: {e}")
         return text
 
+def translate_to_korean(text: str, client: OpenAI, model: str = DEFAULT_OPENAI_MODEL) -> str:
+    """
+    영어 텍스트를 한국어로 번역
+    """
+    if not text or not text.strip():
+        return text
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional translator. "
+                        "Translate the given English text to Korean. "
+                        "Only return the translated text without any additional explanation or formatting."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Translate the following English text to Korean:\n\n{text}",
+                },
+            ],
+            temperature=0.0,
+            max_tokens=1000,
+        )
+        translated = (response.choices[0].message.content or "").strip()
+        return translated
+    except Exception as e:
+        print(f"경고: 계층 정의 번역 실패, 원문 사용: {e}")
+        return text
 
 def extract_keywords_advanced(text: str) -> str:
     """사용자 입력을 DB와 동일한 '키워드' 형식으로 변환"""
@@ -766,94 +798,95 @@ class HSClassifier:
         """GraphDB에서 특정 코드의 정의(description)를 가져옴"""
         if self._graph_rag is None or not code:
             return ""
-        
+
         try:
-            # 코드 정규화 (점 제거)
+            # 코드 정규화 (점/하이픈 제거)
             code_clean = code.replace('.', '').replace('-', '')
-            
-            # 다양한 형식으로 시도
+
+            # 다양한 표현 형태 시도
             code_variants = [code_clean]
-            if '.' in code:
-                code_variants.append(code)
-            if len(code_clean) >= 4:
-                # 4자리 이상이면 점 있는 형식도 추가
-                if len(code_clean) == 4:
-                    code_variants.append(code_clean)
-                elif len(code_clean) == 6:
-                    code_variants.append(f"{code_clean[:4]}.{code_clean[4:6]}")
-                elif len(code_clean) == 10:
-                    code_variants.append(f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}")
-            
+
+            # 길이에 따라 점 포함 버전도 추가
+            if len(code_clean) == 4:
+                # 4자리: 94xx 같은 heading
+                code_variants.append(code_clean)
+            elif len(code_clean) == 6:
+                # 6자리: 4+2 형태
+                code_variants.append(f"{code_clean[:4]}.{code_clean[4:6]}")
+            elif len(code_clean) == 10:
+                # 10자리: 4.2.2.2 형태
+                code_variants.append(
+                    f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}"
+                )
+
             # 중복 제거
             code_variants = list(set(code_variants))
             candidates_str = str(code_variants).replace("'", '"')
-            
-            # Cypher 쿼리로 description 조회
+
+            # 라벨 제한 없이 code 속성만으로 매칭
             cypher_query = f"""
             UNWIND {candidates_str} AS code_str
-            MATCH (item:HSItem {{code: code_str}})
-            RETURN item.code AS code, item.description AS description
+            MATCH (item {{code: code_str}})
+            RETURN 
+              item.code AS code,
+              coalesce(
+                item.description_ko,
+                item.description,
+                item.name_ko,
+                item.name
+              ) AS description
             LIMIT 1
             """
-            
+
             results = self._graph_rag.graph.query(cypher_query)
             if results and len(results) > 0:
-                return results[0].get('description', '') or ''
+                desc = results[0].get("description", "") or ""
+                if desc:
+                    # 영어라면 한국어로 번역
+                    desc = translate_to_korean(desc, self.client, self.openai_model)
+                return desc
+
             return ""
+
         except Exception as e:
             print(f"경고: 코드 정의 조회 실패 ({code}): {e}")
             return ""
-    
+
+
     def _add_hierarchy_definitions(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """각 candidate의 10자리 코드에서 계층별 정의를 추출하여 추가"""
         if not candidates or self._graph_rag is None:
             return candidates
-        
+
         for candidate in candidates:
             hs_code = str(candidate.get('hs_code', ''))
             if not hs_code:
                 continue
-            
-            # 10자리 코드 정규화 (점 제거)
+
             code_clean = hs_code.replace('.', '').replace('-', '')
-            
+
             if len(code_clean) < 10:
-                # 10자리가 아니면 스킵
                 continue
-            
-            # 각 계층 코드 추출
-            code_2digit = code_clean[:2]  # 2자리
-            code_4digit = code_clean[:4]  # 4자리
-            code_6digit = f"{code_clean[:4]}.{code_clean[4:6]}"  # 6자리 (점 포함)
-            code_10digit = f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}"  # 10자리 (점 포함)
-            
-            # 각 계층의 정의 조회
+
+            code_2digit = code_clean[:2]
+            code_4digit = code_clean[:4]
+            code_6digit = f"{code_clean[:4]}.{code_clean[4:6]}"
+            code_10digit = f"{code_clean[:4]}.{code_clean[4:6]}.{code_clean[6:8]}.{code_clean[8:10]}"
+
             definition_2digit = self._get_code_definition(code_2digit)
             definition_4digit = self._get_code_definition(code_4digit)
             definition_6digit = self._get_code_definition(code_6digit)
             definition_10digit = self._get_code_definition(code_10digit)
-            
-            # candidate에 추가
+
             candidate['hierarchy_definitions'] = {
-                'chapter_2digit': {
-                    'code': code_2digit,
-                    'definition': definition_2digit
-                },
-                'heading_4digit': {
-                    'code': code_4digit,
-                    'definition': definition_4digit
-                },
-                'subheading_6digit': {
-                    'code': code_6digit,
-                    'definition': definition_6digit
-                },
-                'national_10digit': {
-                    'code': code_10digit,
-                    'definition': definition_10digit
-                }
+                'chapter_2digit': {'code': code_2digit, 'definition': definition_2digit},
+                'heading_4digit': {'code': code_4digit, 'definition': definition_4digit},
+                'subheading_6digit': {'code': code_6digit, 'definition': definition_6digit},
+                'national_10digit': {'code': code_10digit, 'definition': definition_10digit}
             }
-        
+
         return candidates
+
     
     def _format_chroma_context(self, hits: List[Dict[str, Any]], max_docs: int = 10) -> str:
         """ChromaDB 검색 결과를 컨텍스트 문자열로 포맷팅 (case data용)"""
@@ -1871,7 +1904,7 @@ class HSClassifier:
         
         # 하위 호환성을 위해 기존 필드명도 유지 (2단계 context)
         result_10digit["chromaDB_context"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
-        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else "
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
 
         # Nomenclature 컨텍스트 공유 (Stage1/Stage2)
         # nom_ctx = nomenclature_context if self.use_nomenclature else ""
