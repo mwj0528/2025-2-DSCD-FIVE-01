@@ -487,7 +487,7 @@ if __name__ == "__main__":
 
  python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "LED lamp" --desc "This product is a finished LED lamp with a plastic housing and a built-in semiconductor LED light source. It is designed to provide illumination and includes internal driver electronics. The lamp is made mainly of plastic materials such as polycarbonate. It is sold as a complete product, not as a part or kit. Typical size ranges from approximately 50–100 mm in diameter and 50–150 mm in height."
 
- python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "DISK NUT ASSY(TES62-300)" --desc "- 나선 가공한 홀(볼트 삽입용)을 가진 원형의 구리 합금 재질 물품 (신청 물품) - 재질: C3771(황동), 크기: M12(나사지름) × ∅106(전체 외경) × 15(두께) - 용도: 변압기의 누설 전류를 줄이는 탱크 실드(차폐판)를 탱크 내벽에 지지 및 고정하기 위해 사용"
- 
+
+ python LLM/run_rag.py --parser both --hierarchical --embed-model openai_large --name "DISK NUT ASSY(TES62-300)" --desc "- 나선 가공한 홀(볼트 삽입용)을 가진 원형의 구리 합금 재질 물품 (신청 물품) - 재질: C3771(황동), 크기: M12(나사지름) × ∅106(전체 외경) × 15(두께) - 용도: 변압기의 누설 전류를 줄이는 탱크 실드(차폐판)를 탱크 내벽에 지지 및 고정하기 위해 사용" 
  
  """

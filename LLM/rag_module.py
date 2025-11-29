@@ -1656,11 +1656,7 @@ class HSClassifier:
         result, err = _parse_json_safely(output_text)
         if err:
             result = {"error": err, "raw_output": output_text}
-        
-        # 각 candidate에 계층별 정의 추가
-        if "candidates" in result and isinstance(result["candidates"], list):
-            result["candidates"] = self._add_hierarchy_definitions(result["candidates"])
-        
+ 
         # context 정보 추가
         # result["chromaDB_context"] = vector_context if self.parser_type in ["chroma", "both"] else ""
         # result["graphDB_context"] = graph_context if self.parser_type in ["graph", "both"] else ""
@@ -1853,6 +1849,7 @@ class HSClassifier:
         # 각 candidate에 계층별 정의 추가
         if "candidates" in result_10digit and isinstance(result_10digit["candidates"], list):
             result_10digit["candidates"] = self._add_hierarchy_definitions(result_10digit["candidates"])
+
         
         # context 정보 추가 (1단계: 6자리 예측용 context)
         vector_context_step1 = ""
@@ -1874,14 +1871,13 @@ class HSClassifier:
         
         # 하위 호환성을 위해 기존 필드명도 유지 (2단계 context)
         result_10digit["chromaDB_context"] = vector_context_step2 if self.parser_type in ["chroma", "both"] else ""
-        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else ""
+        result_10digit["graphDB_context"] = final_graph_context if self.parser_type in ["graph", "both"] else "
 
         # Nomenclature 컨텍스트 공유 (Stage1/Stage2)
         # nom_ctx = nomenclature_context if self.use_nomenclature else ""
         # result_10digit["nomenclature_context_step1"] = nom_ctx
         # result_10digit["nomenclature_context_step2"] = nom_ctx
-        # result_10digit["nomenclature_context"] = nom_ctx
-        
+        # result_10digit["nomenclature_context"] = nom_ctx        
         return result_10digit
     
     def classify_hs_code_hierarchical_3stage(
