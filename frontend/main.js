@@ -9,6 +9,7 @@ let productName = "";
 let lastUserText = "";
 let loadingTimers = [];
 let loaderInterval = null;    // 로딩 문구 변경용 타이머
+let isProcessing = false;     // 한 번의 입력이 두 번 처리되는 것 방지
 
 // 현재 화면에서 진행 중인 "한 번의 분류 대화" 메시지들(스냅샷용 버퍼)
 let currentMessages = [];
@@ -23,8 +24,8 @@ let historyCounter = 0;
 function renderMessage(text, who) {
   const div = document.createElement("div");
   div.className = `msg ${who}`;
-  // 카드 UI를 쓰기 위해 HTML 허용
-  div.innerHTML = text;
+  // 말풍선 전용: HTML 대신 텍스트 + 줄바꿈만 사용
+  div.textContent = text;
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -37,85 +38,57 @@ function addMessage(text, who) {
 function bot(text) { addMessage(text, "bot"); }
 function user(text) { addMessage(text, "user"); }
 
-// ===================== 추천 카드 렌더러 =====================
+// ===================== 추천 결과 말풍선 포맷터 =====================
 
-function renderRecommendationCard(rec, index) {
-  const hs = rec.hs_code || "-";
-  const title = rec.title || "-";
-  const reason = rec.reason || "-";
+function formatRecommendationText(rec, index) {
+  const rank = index + 1;
+  const hs = rec.hs_code || rec.code || "-";
+  const title = rec.title || rec.label || "";
+  const reason = rec.reason || rec.explanation || "-";
   const h = rec.hierarchy_definitions || {};
   const citations = Array.isArray(rec.citations) ? rec.citations : [];
 
-  return `
-    <div class="rec-card">
-      <div class="rec-card-header">
-        <div class="rec-rank">⭐ 추천 ${index + 1}</div>
-        <div class="rec-hscode">
-          HS Code:
-          <span>${hs}</span>
-        </div>
-      </div>
+  let text = `⭐ 추천 ${rank}\n`;
+  text += `HS Code: ${hs}`;
+  if (title) {
+    text += `\n품명: ${title}`;
+  }
 
-      <div class="rec-title">${title}</div>
+  text += `\n\n💡 사유\n${reason}`;
 
-      <div class="rec-section">
-        <div class="rec-section-title">💡 사유</div>
-        <div class="rec-section-body">${reason}</div>
-      </div>
+  if (
+    h &&
+    (h.chapter_2digit || h.heading_4digit || h.subheading_6digit || h.national_10digit)
+  ) {
+    text += `\n\n📚 계층 구조 정의`;
+    if (h.chapter_2digit) {
+      text += `\n- 2단위(Chapter)  ${h.chapter_2digit.code} — ${h.chapter_2digit.definition || ""}`;
+    }
+    if (h.heading_4digit) {
+      text += `\n- 4단위(Heading)  ${h.heading_4digit.code} — ${h.heading_4digit.definition || ""}`;
+    }
+    if (h.subheading_6digit) {
+      text += `\n- 6단위(Subheading)  ${h.subheading_6digit.code} — ${h.subheading_6digit.definition || ""}`;
+    }
+    if (h.national_10digit) {
+      text += `\n- 10단위(National)  ${h.national_10digit.code} — ${h.national_10digit.definition || ""}`;
+    }
+  }
 
-      ${
-        h && (h.chapter_2digit || h.heading_4digit || h.subheading_6digit || h.national_10digit)
-          ? `
-      <div class="rec-section">
-        <div class="rec-section-title">📚 계층 구조 정의</div>
-        <ul class="rec-hierarchy-list">
-          ${
-            h.chapter_2digit
-              ? `<li><b>2단위(Chapter)</b> ${h.chapter_2digit.code} — ${h.chapter_2digit.definition || ""}</li>`
-              : ""
-          }
-          ${
-            h.heading_4digit
-              ? `<li><b>4단위(Heading)</b> ${h.heading_4digit.code} — ${h.heading_4digit.definition || ""}</li>`
-              : ""
-          }
-          ${
-            h.subheading_6digit
-              ? `<li><b>6단위(Subheading)</b> ${h.subheading_6digit.code} — ${h.subheading_6digit.definition || ""}</li>`
-              : ""
-          }
-          ${
-            h.national_10digit
-              ? `<li><b>10단위(National)</b> ${h.national_10digit.code} — ${h.national_10digit.definition || ""}</li>`
-              : ""
-          }
-        </ul>
-      </div>`
-          : ""
+  if (citations.length) {
+    text += `\n\n📎 근거 출처`;
+    citations.forEach((ct) => {
+      if (ct.type === "graph") {
+        text += `\n- GraphDB 코드: ${ct.code || "-"}`;
+      } else if (ct.type === "case") {
+        text += `\n- 품목분류사례 문서 ID: ${ct.doc_id || "-"}`;
+      } else {
+        text += `\n- ${ct.type || "-"}`;
       }
+    });
+  }
 
-      ${
-        citations.length
-          ? `
-      <div class="rec-section">
-        <div class="rec-section-title">📎 근거 출처</div>
-        <ul class="rec-citations">
-          ${citations
-            .map((ct) => {
-              if (ct.type === "graph") {
-                return `<li>GraphDB 코드: ${ct.code || "-"}</li>`;
-              } else if (ct.type === "case") {
-                return `<li>품목분류사례 문서 ID: ${ct.doc_id || "-"}</li>`;
-              }
-              return `<li>${ct.type || "-"}</li>`;
-            })
-            .join("")}
-        </ul>
-      </div>`
-          : ""
-      }
-    </div>
-  `;
+  return text;
 }
 
 // ===================== placeholder 관리 =====================
@@ -154,6 +127,7 @@ function resetConversation() {
   productName = "";
   lastUserText = "";
   currentMessages = [];
+  isProcessing = false;
 
   chatEl.innerHTML = "";
   showWelcome();
@@ -263,9 +237,14 @@ function hideLoading() {
 // ===================== 메인 전송 로직 =====================
 
 async function handleSend() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  // 동시에 두 번 눌리는 것 방지
+  if (isProcessing) return;
+
   if (step === "awaiting_name") {
-    const text = inputEl.value.trim();
-    if (!text) return;
+    isProcessing = true;
 
     user(text);
     inputEl.value = "";
@@ -282,11 +261,13 @@ async function handleSend() {
           "• 예시(공산품): '알루미늄 하우징의 실내용 LED 조명기구, 220V 전원 사용'\n" +
           "• 예시(식품): '냉동 보관된 삼겹살 500g, 가열·조리용'\n"
       );
+      isProcessing = false;
     }, 500);
-  } else if (step === "awaiting_desc") {
-    const description = inputEl.value.trim();
-    if (!description) return;
 
+  } else if (step === "awaiting_desc") {
+    isProcessing = true;
+
+    const description = text;
     user(description);
     inputEl.value = "";
 
@@ -304,18 +285,23 @@ async function handleSend() {
 
       if (data.error || data.detail) {
         bot("🚫 오류가 발생했습니다: " + (data.error || data.detail));
+        step = "awaiting_name";
+        updatePlaceholder();
       } else {
         const list = data.candidates || [];
 
         if (!list.length) {
           bot("추천 결과가 없습니다. 설명을 보강하여 다시 시도해주세요.");
+          step = "awaiting_name";
+          updatePlaceholder();
         } else {
           const showResultSequentially = async () => {
             for (let i = 0; i < list.length; i++) {
               const c = list[i];
+              const recText = formatRecommendationText(c, i);
 
-              // 카드 UI로 출력
-              bot(renderRecommendationCard(c, i));
+              // 각 추천 = 하나의 봇 말풍선
+              bot(recText);
 
               if (i < list.length - 1) {
                 await new Promise((resolve) => setTimeout(resolve, 800));
@@ -336,7 +322,7 @@ async function handleSend() {
             }, 600);
           };
 
-          showResultSequentially();
+          await showResultSequentially();
         }
       }
     } catch (err) {
@@ -344,6 +330,8 @@ async function handleSend() {
       bot("요청 중 통신 오류가 발생했습니다: " + err.message);
       step = "awaiting_name";
       updatePlaceholder();
+    } finally {
+      isProcessing = false;
     }
   }
 }
@@ -366,4 +354,3 @@ resetBtn.addEventListener("click", resetConversation);
 // ===================== 최초 진입 시 =====================
 
 showWelcome();
-
