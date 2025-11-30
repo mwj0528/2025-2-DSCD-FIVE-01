@@ -109,7 +109,7 @@ ParserType = Literal["chroma", "graph", "both"]
 load_dotenv()
 
 # 기본 설정
-DEFAULT_CHROMA_DIR = os.getenv("CHROMA_DIR", "data/chroma_db")
+DEFAULT_CHROMA_DIR = os.getenv("CHROMA_DIR", "data/chroma_db_openai_large_kw")
 DEFAULT_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "hscode_collection")
 DEFAULT_NOMENCLATURE_DIR = os.getenv("NOMENCLATURE_DIR", "data/nomenclature_chroma_db")
 DEFAULT_NOMENCLATURE_COLLECTION = os.getenv("NOMENCLATURE_COLLECTION", "hscode_nomenclature")
@@ -1008,7 +1008,7 @@ class HSClassifier:
         # User 프롬프트 구성
         user = f"""
 다음 제품의 HS 코드 상위 {top_n} 후보를 추천하세요. 
-**중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
+중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
 
 [입력]
 - Product Name: {product_name}
