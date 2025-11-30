@@ -1,7 +1,7 @@
 # peek_hscode_fixed.py
 import chromadb, json
 
-PATH = r"../chroma_db"
+PATH = r"E:\PythonProjects\Capstone\data\chroma_db_openai_large_kw"
 COL  = "hscode_collection"
 
 client = chromadb.PersistentClient(path=PATH)

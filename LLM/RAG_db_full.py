@@ -247,7 +247,7 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
 
     user = f"""
 다음 제품의 HS 코드 상위 {top_n} 후보를 추천하세요. 
-**중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
+중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
 
 [입력]
 - Product Name: {product_name}
@@ -281,10 +281,10 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
 }}
 
 필수 규칙:
-1) 후보는 최대 {top_n}개.
-2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).
-3) citations는 최소 1개 이상 포함.
-4) citations.type은 반드시 "graph" 또는 "case"만 가능.
+1) 후보는 최대 {top_n}개
+2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40.10.00)
+3) citations는 최소 1개 이상 포함
+4) citations.type은 반드시 "graph" 또는 "case"만 가능
 """
     return system, user
 
