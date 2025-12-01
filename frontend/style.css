@@ -296,7 +296,7 @@ body {
   height: 8px;
   background-color: #3b5bfd;
   border-radius: 50%;
-  animation: typingBounce 1.4s infinite ease-in-out both;
+  animation: typingBounce 1.8s infinite ease-in-out both;
 }
 
 .typing-dot:nth-child(1) { animation-delay: -0.32s; }
