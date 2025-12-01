@@ -4,12 +4,12 @@ const sendBtn = document.getElementById("send");
 const resetBtn = document.getElementById("reset-btn");
 const historyEl = document.getElementById("history-list");
 
-let step = "awaiting_name";   // 'awaiting_name' → 'awaiting_desc'
+let step = "awaiting_name"; // 'awaiting_name' → 'awaiting_desc'
 let productName = "";
 let lastUserText = "";
 let loadingTimers = [];
-let loaderInterval = null;    // 로딩 문구 변경용 타이머
-let isProcessing = false;     // 한 번의 입력이 두 번 처리되는 것 방지
+let loaderInterval = null; // 로딩 문구 변경용 타이머
+let isProcessing = false; // 한 번의 입력이 두 번 처리되는 것 방지
 
 // 현재 화면에서 진행 중인 "한 번의 분류 대화" 메시지들(스냅샷용 버퍼)
 let currentMessages = [];
@@ -22,10 +22,26 @@ let historyCounter = 0;
 // ===================== 메시지 출력 관련 =====================
 
 function renderMessage(text, who) {
+  // 아무 내용도 없으면 말풍선을 만들지 않음
+  if (text == null || String(text).trim().length === 0) return;
+
+  const safeText = String(text);
+
   const div = document.createElement("div");
   div.className = `msg ${who}`;
-  // 말풍선 전용: HTML 대신 텍스트 + 줄바꿈만 사용
-  div.textContent = text;
+
+  // 봇 메시지는 HTML 허용(HS Code 볼드 등), 사용자 메시지는 순수 텍스트
+  if (who === "bot") {
+    // 이미 HTML 태그가 있으면 그대로, 없으면 줄바꿈만 <br>로 치환
+    if (safeText.includes("<")) {
+      div.innerHTML = safeText;
+    } else {
+      div.innerHTML = safeText.replace(/\n/g, "<br>");
+    }
+  } else {
+    div.textContent = safeText;
+  }
+
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -35,61 +51,110 @@ function addMessage(text, who) {
   currentMessages.push({ who, text });
 }
 
-function bot(text) { addMessage(text, "bot"); }
-function user(text) { addMessage(text, "user"); }
+function bot(text) {
+  addMessage(text, "bot");
+}
+function user(text) {
+  addMessage(text, "user");
+}
 
 // ===================== 추천 결과 말풍선 포맷터 =====================
 
 function formatRecommendationText(rec, index) {
   const rank = index + 1;
-  const hs = rec.hs_code || rec.code || "-";
+  const hs = rec.hs_code || rec.code || "";
   const title = rec.title || rec.label || "";
-  const reason = rec.reason || rec.explanation || "-";
-  const h = rec.hierarchy_definitions || {};
-  const citations = Array.isArray(rec.citations) ? rec.citations : [];
 
-  let text = `⭐ 추천 ${rank}\n`;
-  text += `HS Code: ${hs}`;
+  const rawReason = rec.reason ?? rec.explanation ?? "";
+  const reason = String(rawReason).trim();
+
+  // 계층 구조: 백엔드가 hierarchy_definitions 또는 hierarchy 중 무엇이든 보내도 대응
+  const hRaw = rec.hierarchy_definitions || rec.hierarchy || {};
+  const h2 = hRaw.chapter_2digit ?? hRaw.chapter;
+  const h4 = hRaw.heading_4digit ?? hRaw.heading;
+  const h6 = hRaw.subheading_6digit ?? hRaw.subheading;
+  const h10 = hRaw.national_10digit ?? hRaw.national;
+
+  let text = "";
+
+  // 추천 타이틀
+  text += `<div style="font-weight:700; font-size:16px; margin-bottom:4px;">⭐ 추천 ${rank}</div>`;
+
+  // HS Code 라인(볼드 + 폰트 조금 더 크게, CSS .hs-code-line과도 연동)
+  if (hs) {
+    text += `<div class="hs-code-line">HS Code: ${hs}</div>`;
+  }
+
   if (title) {
-    text += `\n품명: ${title}`;
+    text += `<div>품명: ${title}</div>`;
   }
 
-  text += `\n\n💡 사유\n${reason}`;
-
-  if (
-    h &&
-    (h.chapter_2digit || h.heading_4digit || h.subheading_6digit || h.national_10digit)
-  ) {
-    text += `\n\n📚 계층 구조 정의`;
-    if (h.chapter_2digit) {
-      text += `\n- 2단위(Chapter)  ${h.chapter_2digit.code} — ${h.chapter_2digit.definition || ""}`;
-    }
-    if (h.heading_4digit) {
-      text += `\n- 4단위(Heading)  ${h.heading_4digit.code} — ${h.heading_4digit.definition || ""}`;
-    }
-    if (h.subheading_6digit) {
-      text += `\n- 6단위(Subheading)  ${h.subheading_6digit.code} — ${h.subheading_6digit.definition || ""}`;
-    }
-    if (h.national_10digit) {
-      text += `\n- 10단위(National)  ${h.national_10digit.code} — ${h.national_10digit.definition || ""}`;
-    }
+  // 사유
+  if (reason) {
+    text += `<br><strong>💡 사유</strong><br>${reason}`;
   }
 
-  if (citations.length) {
-    text += `\n\n📎 근거 출처`;
-    citations.forEach((ct) => {
-      if (ct.type === "graph") {
-        text += `\n- GraphDB 코드: ${ct.code || "-"}`;
-      } else if (ct.type === "case") {
-        text += `\n- 품목분류사례 문서 ID: ${ct.doc_id || "-"}`;
-      } else {
-        text += `\n- ${ct.type || "-"}`;
+  // 계층 구조 정의
+  if (h2 || h4 || h6 || h10) {
+    text += `<br><br><strong>📚 계층 구조 정의</strong>`;
+
+    if (h2) {
+      const code = h2.code ?? "";
+      // null / undefined만 빈칸 처리, ""(빈문자열)이나 영어 원문은 그대로 둠
+      const def =
+        h2.definition === undefined || h2.definition === null
+          ? ""
+          : h2.definition;
+      if (code || String(def).trim().length > 0) {
+        text += `<br>- 2단위(Chapter)  ${code}${
+          code && def ? " — " : ""
+        }${def}`;
       }
-    });
+    }
+
+    if (h4) {
+      const code = h4.code ?? "";
+      const def =
+        h4.definition === undefined || h4.definition === null
+          ? ""
+          : h4.definition;
+      if (code || String(def).trim().length > 0) {
+        text += `<br>- 4단위(Heading)  ${code}${
+          code && def ? " — " : ""
+        }${def}`;
+      }
+    }
+
+    if (h6) {
+      const code = h6.code ?? "";
+      const def =
+        h6.definition === undefined || h6.definition === null
+          ? ""
+          : h6.definition;
+      if (code || String(def).trim().length > 0) {
+        text += `<br>- 6단위(Subheading)  ${code}${
+          code && def ? " — " : ""
+        }${def}`;
+      }
+    }
+
+    if (h10) {
+      const code = h10.code ?? "";
+      const def =
+        h10.definition === undefined || h10.definition === null
+          ? ""
+          : h10.definition;
+      if (code || String(def).trim().length > 0) {
+        text += `<br>- 10단위(National)  ${code}${
+          code && def ? " — " : ""
+        }${def}`;
+      }
+    }
   }
 
   return text;
 }
+
 
 // ===================== placeholder 관리 =====================
 
@@ -141,7 +206,7 @@ function addHistoryEntry(name, topCandidate) {
   const empty = historyEl.querySelector(".history-empty");
   if (empty) empty.remove();
 
-  const hs = topCandidate.hs_code || "-";
+  const hs = topCandidate.hs_code || "";
   const title = topCandidate.title || topCandidate.label || "";
 
   historyCounter += 1;
@@ -153,11 +218,16 @@ function addHistoryEntry(name, topCandidate) {
     messages: currentMessages.map((m) => ({ ...m })),
   };
 
+  const subParts = [];
+  if (hs) subParts.push(hs);
+  if (title) subParts.push(title);
+  const sub = subParts.join(" · ");
+
   const item = document.createElement("div");
   item.className = "history-item";
   item.innerHTML = `
     <div class="history-title">${name}</div>
-    <div class="history-sub">${hs} · ${title}</div>
+    <div class="history-sub">${sub}</div>
   `;
   item.dataset.sessionId = sessionId;
 
@@ -263,7 +333,6 @@ async function handleSend() {
       );
       isProcessing = false;
     }, 500);
-
   } else if (step === "awaiting_desc") {
     isProcessing = true;
 
