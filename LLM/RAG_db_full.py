@@ -246,8 +246,8 @@ def build_rag_prompt(product_name: str, product_description: str, retrieved: Lis
         graph_section = "(GraphDB 검색 결과 없음)"
 
     user = f"""
-다음 제품의 HS 코드 상위 {top_n} 후보를 추천하세요. 
-중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
+다음 제품의 HS 코드 상위 {top_n} 후보를 추천하세요 
+중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00)
 
 [입력]
 - Product Name: {product_name}
