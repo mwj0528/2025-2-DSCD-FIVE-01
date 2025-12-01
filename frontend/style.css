@@ -14,7 +14,7 @@
 body {
   margin: 0;
   height: 100vh;
-  overflow: hidden; /* 메인 스크롤은 chat-messages에서만 */
+  overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   background: var(--bg-page);
   color: var(--text-main);
@@ -68,7 +68,7 @@ body {
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.5);
-  cursor: pointer;                 /* ← 클릭 가능 표시 */
+  cursor: pointer;
   transition: background 0.15s, transform 0.05s;
 }
 
@@ -76,7 +76,6 @@ body {
   background: rgba(15, 23, 42, 0.8);
   transform: translateY(-1px);
 }
-
 
 .history-title {
   font-size: 13px;
@@ -157,10 +156,19 @@ body {
   padding: 20px 24px;
   background: #f9fafb;
   overflow-y: auto;
+  display: block;  /* flex 제거 - 일반 블록 레이아웃 */
+}
+
+/* float 해제를 위한 clearfix */
+.chat-messages::after {
+  content: "";
+  display: table;
+  clear: both;
 }
 
 /* 메시지 버블 */
 .msg {
+  display: inline-block;
   max-width: 78%;
   padding: 10px 13px;
   border-radius: 14px;
@@ -168,18 +176,31 @@ body {
   line-height: 1.5;
   margin-bottom: 10px;
   white-space: pre-line;
+  word-wrap: break-word;
+  box-sizing: border-box;
+  clear: both;
 }
 
+/* 봇 말풍선: 왼쪽 정렬 */
 .msg.bot {
-  margin-right: auto;
+  float: left;
   background: var(--bubble-bot);
   border: 1px solid var(--border-subtle);
+  text-align: left;
 }
 
+/* 사용자 말풍선: 오른쪽 정렬 */
 .msg.user {
-  margin-left: auto;
+  float: right;
   background: var(--bubble-user);
   border: 1px solid #d1ddff;
+  text-align: left;  /* 말풍선 내부 텍스트는 왼쪽 정렬이 자연스러움 */
+}
+
+/* HS Code 라인 강조용 */
+.hs-code-line {
+  font-weight: 700;
+  font-size: 15px;
 }
 
 /* 입력 영역 (하단 고정) */
@@ -253,7 +274,8 @@ body {
     padding: 12px 14px;
   }
 }
-/* ===== 로딩(Typing) 애니메이션 추가 ===== */
+
+/* ===== 로딩(Typing) 애니메이션 ===== */
 
 /* 로딩 버블 스타일 */
 .msg.loading {
@@ -261,18 +283,18 @@ body {
   border: 1px solid #e4e6f0;
   color: #6b7280;
   font-style: italic;
-  width: fit-content;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 12px 16px;
+  float: left;  /* 로딩도 왼쪽에 */
 }
 
 /* 점(Dot) 3개 스타일 */
 .typing-dot {
   width: 8px;
   height: 8px;
-  background-color: #3b5bfd; /* 파란색 */
+  background-color: #3b5bfd;
   border-radius: 50%;
   animation: typingBounce 1.4s infinite ease-in-out both;
 }
@@ -286,5 +308,3 @@ body {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
 }
-
-
