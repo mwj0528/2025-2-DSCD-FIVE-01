@@ -1008,7 +1008,7 @@ class HSClassifier:
         # User 프롬프트 구성
         user = f"""
 다음 제품의 HS 코드 상위 {top_n} 후보를 추천하세요. 
-중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).**
+중요: 추천하는 모든 HS Code는 반드시 10자리여야 합니다 (예: 9405.40-1000).**
 
 [입력]
 - Product Name: {product_name}
@@ -1040,7 +1040,7 @@ class HSClassifier:
 {{
   "candidates": [
     {{
-      "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
+      "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40-1000)
       "title": "string",
       "reason": "string",           // 한국어
       "citations": [
@@ -1053,7 +1053,7 @@ class HSClassifier:
 
 필수 규칙:
 1) 후보는 최대 {top_n}개.
-2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).
+2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40-1000).
 3) citations는 최소 1개 이상 포함.
 4) citations.type은 반드시 "graph" 또는 "case"만 가능.
 """
@@ -1443,7 +1443,7 @@ class HSClassifier:
         
         system += (
             "3) 계층 구조와 다른 코드는 절대 제시하지 않습니다.\n"
-            "4) 추천하는 HS Code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).\n"
+            "4) 추천하는 HS Code는 반드시 10자리여야 합니다 (예: 9405.40-1000).\n"
             "5) **중요: 우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 추천하되, "
             "해당 컨텍스트에 적합한 코드가 없으면 전체 GraphDB Context에서 적절한 코드를 찾아 추천할 수 있습니다.**\n"
             "6) 항상 응답은 strict JSON format으로만 출력합니다.\n\n"
@@ -1511,7 +1511,7 @@ class HSClassifier:
 {{
   "candidates": [
     {{
-      "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40.10.00)
+      "hs_code": "string",          // 반드시 10자리 HS Code (예: 9405.40-1000)
       "title": "string",
       "reason": "string",           // 한국어
       "citations": [
@@ -1524,7 +1524,7 @@ class HSClassifier:
 
 필수 규칙:
 1) 후보는 최대 {top_n}개.
-2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40.10.00).
+2) hs_code는 반드시 10자리여야 합니다 (예: 9405.40-1000).
 3) 우선적으로 '10자리 HS Code 후보' 컨텍스트에 있는 코드를 선택하세요. 해당 컨텍스트에 적절한 코드가 없으면 전체 GraphDB Context에서 찾아 추천할 수 있습니다.
 4) citations는 최소 1개 이상 포함.
 5) citations.type은 반드시 "graph" 또는 "case"만 가능.
