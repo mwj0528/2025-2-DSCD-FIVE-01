@@ -278,16 +278,16 @@ function showLoading() {
   loaderInterval = setInterval(() => {
     timePassed += 1;
 
-    if (timePassed === 10) {
+    if (timePassed === 6) {
       loadingTextEl.innerText =
         "1단계: 유사 품목 사례와 HS 계층 구조를 검색하고 있습니다...";
-    } else if (timePassed === 22) {
+    } else if (timePassed === 11) {
       loadingTextEl.innerText =
         "2단계: 6자리 및 10자리 HS Code 후보를 점수화하고 있습니다...";
-    } else if (timePassed === 37) {
+    } else if (timePassed === 16) {
       loadingTextEl.innerText =
         "3단계: 각 후보의 분류 근거를 생성하고 있습니다...";
-    } else if (timePassed === 58) {
+    } else if (timePassed === 26) {
       loadingTextEl.innerText = "✍️ 결과를 정리하고 있습니다...";
     }
   }, 1000);
@@ -326,11 +326,16 @@ async function handleSend() {
     setTimeout(() => {
       bot(
         `✅ 상품명 '${productName}'(을)를 확인했습니다.\n\n` +
-          "정확한 분류를 위해 상품의 특징을 간단히 알려주세요.\n" +
-          "예) 재질/성분, 용도·사용 환경, 규격·구성, 제조 방식 등\n\n" +
-          "• 예시(공산품): '알루미늄 하우징의 실내용 LED 조명기구, 220V 전원 사용'\n" +
-          "• 예시(식품): '냉동 보관된 삼겹살 500g, 가열·조리용'\n"
-      );
+        "정확한 분류를 위해 상품의 특징을 조금 더 자세히 알려주세요.\n" +
+        "(재질·성분, 용도·사용 환경, 규격·구성, 제조 방식 등)\n\n" +
+        "아래 예시를 참고해 자유롭게 입력해 주세요.\n\n" +
+        "• 예시(공산품):\n" +
+        "\"알루미늄 하우징과 폴리카보네이트 확산커버로 구성된 실내용 LED 조명기구\n" +
+        "정격 220V, 15W, 벽·천장 설치용이며, LED 모듈을 방열판에 직접 부착한 일체형 구조로 제작됨\"\n\n" +
+        "• 예시(식품):\n" +
+        "\"돼지고기 삼겹살 원육만을 사용해 별도 양념 없이 500g 단위로 포장\n" +
+        "-18℃ 이하에서 냉동 보관·유통되며, 가열·조리 후 섭취하는 가정용 냉동 육류 제품\"\n"
+      );      
       isProcessing = false;
     }, 500);
   } else if (step === "awaiting_desc") {
