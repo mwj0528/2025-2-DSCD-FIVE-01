@@ -174,7 +174,7 @@ python LLM/run_rag.py \
 - **상품명** (`--name`): 상품의 이름
 - **상품 설명** (`--desc`): 상품에 대한 상세 설명
 
-### 7.2 출력 예시시(JSON)
+### 7.2 출력 예시(JSON)
 ```json
 {
   "candidates": [

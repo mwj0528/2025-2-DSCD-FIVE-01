@@ -416,13 +416,12 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
+    
 
 """
+
 ### openai_large 임베딩 모델 사용 버전(--embed-model openai_large) ###
 
-# 1stage model(--output-path 결과저장경로)
-
-python LLM/evaluate.py --parser both --embed-model openai_large --output-path "output/results/base_openai_large/eval_result.csv"
 
 # 2stage(--hierarchical --output-path 결과저장경로)
 

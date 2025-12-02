@@ -278,16 +278,16 @@ function showLoading() {
   loaderInterval = setInterval(() => {
     timePassed += 1;
 
-    if (timePassed === 10) {
+    if (timePassed === 6) {
       loadingTextEl.innerText =
         "1단계: 유사 품목 사례와 HS 계층 구조를 검색하고 있습니다...";
-    } else if (timePassed === 22) {
+    } else if (timePassed === 11) {
       loadingTextEl.innerText =
         "2단계: 6자리 및 10자리 HS Code 후보를 점수화하고 있습니다...";
-    } else if (timePassed === 37) {
+    } else if (timePassed === 16) {
       loadingTextEl.innerText =
         "3단계: 각 후보의 분류 근거를 생성하고 있습니다...";
-    } else if (timePassed === 58) {
+    } else if (timePassed === 26) {
       loadingTextEl.innerText = "✍️ 결과를 정리하고 있습니다...";
     }
   }, 1000);

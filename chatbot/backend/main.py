@@ -1,3 +1,8 @@
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
+
 # backend/main.py
 import os
 import sys
@@ -20,6 +25,22 @@ from LLM.rag_service import classify_hs
 
 
 app = FastAPI()
+
+# ==== 프론트엔드 경로 설정 ====
+BASE_DIR = Path(__file__).resolve().parent.parent  # project-root
+FRONTEND_DIR = BASE_DIR / "frontend"
+
+# /static 아래로 main.js, style.css 서빙
+app.mount(
+    "/static",
+    StaticFiles(directory=str(FRONTEND_DIR), html=False),
+    name="static",
+)
+
+# 루트 URL에서 index.html 반환
+@app.get("/")
+def read_root():
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 # CORS 설정 (필요시 수정)
 app.add_middleware(
