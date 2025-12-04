@@ -58,6 +58,7 @@
 ```
 2025-2-DSCD-FIVE-01/
 ├── LLM/                          # LLM 관련 코드
+│   ├── .env                     # 필요 Key 저장
 │   ├── run_rag.py               # 메인 실행 스크립트
 │   ├── rag_module.py            # 핵심 RAG 모듈 (HSClassifier)
 │   ├── evaluate.py              # 평가 스크립트
@@ -174,7 +175,7 @@ python LLM/run_rag.py \
 - **상품명** (`--name`): 상품의 이름
 - **상품 설명** (`--desc`): 상품에 대한 상세 설명
 
-### 7.2 출력 예시시(JSON)
+### 7.2 출력 예시(JSON)
 ```json
 {
   "candidates": [
