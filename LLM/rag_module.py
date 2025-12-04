@@ -823,18 +823,24 @@ class HSClassifier:
             code_variants = list(set(code_variants))
             candidates_str = str(code_variants).replace("'", '"')
 
-            # 라벨 제한 없이 code 속성만으로 매칭
+            # # 라벨 제한 없이 code 속성만으로 매칭
+            # cypher_query = f"""
+            # UNWIND {candidates_str} AS code_str
+            # MATCH (item {{code: code_str}})
+            # RETURN 
+            #   item.code AS code,
+            #   coalesce(
+            #     item.description_ko,
+            #     item.description,
+            #     item.name_ko,
+            #     item.name
+            #   ) AS description
+            # LIMIT 1
+            # """
             cypher_query = f"""
             UNWIND {candidates_str} AS code_str
-            MATCH (item {{code: code_str}})
-            RETURN 
-              item.code AS code,
-              coalesce(
-                item.description_ko,
-                item.description,
-                item.name_ko,
-                item.name
-              ) AS description
+            MATCH (item:HSItem {{code: code_str}})
+            RETURN item.code AS code, item.description AS description
             LIMIT 1
             """
 
@@ -1850,6 +1856,7 @@ class HSClassifier:
             ten_digit_context = "(하위 10자리 코드를 찾을 수 없어 전체 GraphDB 컨텍스트를 참고하세요.)"
         
         # 2단계: 10자리 코드 예측 프롬프트 구성
+        
         sys_prompt_10digit, user_prompt_10digit = self._build_prompt_10digit_hierarchical(
             product_name, product_description, chroma_hits, graph_context, ten_digit_context, nomenclature_context, top_n
         )
