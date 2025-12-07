@@ -58,6 +58,7 @@
 ```
 2025-2-DSCD-FIVE-01/
 ├── LLM/                          # LLM 관련 코드
+│   ├── .env                     # 필요 Key 저장
 │   ├── run_rag.py               # 메인 실행 스크립트
 │   ├── rag_module.py            # 핵심 RAG 모듈 (HSClassifier)
 │   ├── evaluate.py              # 평가 스크립트
