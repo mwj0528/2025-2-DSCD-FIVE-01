@@ -11,6 +11,7 @@ import os
 import time
 # from rag_module import HSClassifier, ParserType, set_all_seeds
 from rag_module_final import HSClassifier, set_all_seeds
+
 EMBED_MODEL_CHOICES = {
     "openai_small": "text-embedding-3-small",
     "openai_large": "text-embedding-3-large",
@@ -34,9 +35,6 @@ def main():
 사용 예시:
   # 기본 사용 (계층적 2단계 RAG, OpenAI Large 임베딩, Nomenclature 포함)
   python run_rag_final.py --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈"
-  
-  # 다른 임베딩 모델 사용
-  python run_rag_final.py --name "LED 조명" --desc "플라스틱 하우징에 장착된 LED 조명 모듈" --embed-model intfloat/multilingual-e5-small
         """
     )
     
@@ -91,15 +89,11 @@ def main():
         dest="use_keyword_extraction",
         help="ChromaDB 검색 시 키워드 추출 사용 안 함 (기본값: 키워드 추출 사용)"
     )
-    parser.add_argument(
-        "--embed-model",
-        type=str,
-        choices=list(EMBED_MODEL_CHOICES.keys()),
-        default="openai_large",
-        help="쿼리 임베딩에 사용할 모델 선택 (기본값: openai_large)",
-    )
     
     args = parser.parse_args()
+    
+    # 임베딩 모델은 항상 openai_large로 고정
+    embed_model_key = "openai_large"
     
     # ===== 재현성을 위한 랜덤 시드 설정 =====
     # 환경변수에서 seed 가져오기 (기본값: 42)
@@ -109,10 +103,10 @@ def main():
     
     # HSClassifier 인스턴스 생성
     print(f"=== HS Code 분류 시스템 초기화 (최종 모델) ===")
-    resolved_chroma_dir = args.chroma_dir or EMBED_CHROMA_DIR.get(args.embed_model)
+    resolved_chroma_dir = args.chroma_dir or EMBED_CHROMA_DIR.get(embed_model_key)
     print(f"모드: ChromaDB + GraphDB (both)")
     print(f"Nomenclature ChromaDB: 사용 (고정)")
-    print(f"임베딩 모델: {args.embed_model} ({EMBED_MODEL_CHOICES[args.embed_model]})")
+    print(f"임베딩 모델: {embed_model_key} ({EMBED_MODEL_CHOICES[embed_model_key]}) (고정)")
     if resolved_chroma_dir:
         print(f"ChromaDB 디렉터리: {resolved_chroma_dir}")
     print(f"상품명: {args.name}")
@@ -121,7 +115,7 @@ def main():
 
     try:
         classifier = HSClassifier(
-            embed_model=EMBED_MODEL_CHOICES[args.embed_model],
+            embed_model=EMBED_MODEL_CHOICES[embed_model_key],
             use_keyword_extraction=args.use_keyword_extraction,
             seed=seed,
             use_nomenclature=True  # 항상 사용
