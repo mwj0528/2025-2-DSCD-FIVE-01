@@ -16,7 +16,7 @@ if root_dir not in sys.path:
     sys.path.append(root_dir)
 
 # 이제 LLM 패키지 안의 rag_service를 가져온다
-from LLM.rag_service import classify_hs
+from LLM.rag_service_final import classify_hs
 
 
 app = FastAPI()
@@ -166,5 +166,5 @@ frontend_dir = os.path.join(root_dir, "frontend")
 app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 
 # uvicorn 실행 명령:
-# uvicorn backend.main:app --host 0.0.0.0 --port 8000
+# uvicorn backend.main:app --host localhost --port 8000
 
